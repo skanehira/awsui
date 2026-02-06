@@ -16,6 +16,7 @@ pub trait Ec2Client: Send + Sync {
     async fn start_instances(&self, ids: &[String]) -> Result<(), AppError>;
     async fn stop_instances(&self, ids: &[String]) -> Result<(), AppError>;
     async fn reboot_instances(&self, ids: &[String]) -> Result<(), AppError>;
+    async fn terminate_instances(&self, ids: &[String]) -> Result<(), AppError>;
 }
 
 /// AWS SDK EC2クライアントの実装
@@ -90,6 +91,16 @@ impl Ec2Client for AwsEc2Client {
     async fn reboot_instances(&self, ids: &[String]) -> Result<(), AppError> {
         self.client
             .reboot_instances()
+            .set_instance_ids(Some(ids.to_vec()))
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn terminate_instances(&self, ids: &[String]) -> Result<(), AppError> {
+        self.client
+            .terminate_instances()
             .set_instance_ids(Some(ids.to_vec()))
             .send()
             .await

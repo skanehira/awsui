@@ -14,6 +14,14 @@ use mockall::automock;
 pub trait SecretsClient: Send + Sync {
     async fn list_secrets(&self) -> Result<Vec<Secret>, AppError>;
     async fn describe_secret(&self, secret_id: &str) -> Result<SecretDetail, AppError>;
+    async fn create_secret(
+        &self,
+        name: &str,
+        value: &str,
+        description: Option<String>,
+    ) -> Result<(), AppError>;
+    async fn update_secret_value(&self, secret_id: &str, value: &str) -> Result<(), AppError>;
+    async fn delete_secret(&self, secret_id: &str) -> Result<(), AppError>;
 }
 
 /// AWS SDK Secrets Managerクライアントの実装
@@ -75,6 +83,44 @@ impl SecretsClient for AwsSecretsClient {
             .map_err(|e| AppError::AwsApi(e.to_string()))?;
 
         Ok(convert_secret_detail(&resp))
+    }
+
+    async fn create_secret(
+        &self,
+        name: &str,
+        value: &str,
+        description: Option<String>,
+    ) -> Result<(), AppError> {
+        let mut req = self.client.create_secret().name(name).secret_string(value);
+        if let Some(desc) = description {
+            req = req.description(desc);
+        }
+        req.send()
+            .await
+            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn update_secret_value(&self, secret_id: &str, value: &str) -> Result<(), AppError> {
+        self.client
+            .put_secret_value()
+            .secret_id(secret_id)
+            .secret_string(value)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_secret(&self, secret_id: &str) -> Result<(), AppError> {
+        self.client
+            .delete_secret()
+            .secret_id(secret_id)
+            .force_delete_without_recovery(true)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+        Ok(())
     }
 }
 

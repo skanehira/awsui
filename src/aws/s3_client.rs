@@ -16,6 +16,9 @@ pub trait S3Client: Send + Sync {
         bucket_name: &str,
         prefix: Option<String>,
     ) -> Result<Vec<S3Object>, AppError>;
+    async fn create_bucket(&self, bucket_name: &str) -> Result<(), AppError>;
+    async fn delete_bucket(&self, bucket_name: &str) -> Result<(), AppError>;
+    async fn delete_object(&self, bucket_name: &str, key: &str) -> Result<(), AppError>;
 }
 
 /// AWS SDK S3クライアントの実装
@@ -103,6 +106,37 @@ impl S3Client for AwsS3Client {
         }
 
         Ok(objects)
+    }
+
+    async fn create_bucket(&self, bucket_name: &str) -> Result<(), AppError> {
+        self.client
+            .create_bucket()
+            .bucket(bucket_name)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_bucket(&self, bucket_name: &str) -> Result<(), AppError> {
+        self.client
+            .delete_bucket()
+            .bucket(bucket_name)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_object(&self, bucket_name: &str, key: &str) -> Result<(), AppError> {
+        self.client
+            .delete_object()
+            .bucket(bucket_name)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+        Ok(())
     }
 }
 

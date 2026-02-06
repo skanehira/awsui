@@ -25,5 +25,19 @@ pub enum Action {
     DismissMessage,
     ShowHelp,
     SwitchDetailTab,
+    FollowLink,
+    /// CRUD操作
+    Create,
+    Delete,
+    Edit,
+    /// フォーム入力操作
+    FormSubmit,
+    FormCancel,
+    FormNextField,
+    FormHandleInput(InputRequest),
+    /// 危険操作確認（リソース名入力）
+    DangerConfirmSubmit,
+    DangerConfirmCancel,
+    DangerConfirmHandleInput(InputRequest),
     Noop,
 }

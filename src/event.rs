@@ -44,4 +44,10 @@ pub enum AppEvent {
 
     /// シークレット詳細の読み込み完了
     SecretDetailLoaded(Result<Box<SecretDetail>, AppError>),
+
+    /// ナビゲーションリンク先のVPCデータ読み込み完了
+    NavigateVpcLoaded(Result<(Vec<Vpc>, Vec<Subnet>), AppError>),
+
+    /// CRUD操作の完了（汎用：成功メッセージまたはエラー）
+    CrudCompleted(Result<String, AppError>),
 }

@@ -12,6 +12,8 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
         Mode::Confirm(_) => return handle_confirm_key(key),
         Mode::Message => return handle_message_key(key),
         Mode::Help => return handle_help_key(key),
+        Mode::Form(_) => return handle_form_key(key),
+        Mode::DangerConfirm(_) => return handle_danger_confirm_key(key),
         _ => {}
     }
 
@@ -23,12 +25,18 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
             Mode::Filter => handle_filter_key(key),
             _ => handle_ec2_list_key(key),
         },
-        View::EcrList | View::EcsList | View::S3List | View::VpcList | View::SecretsList => {
-            match app.mode {
-                Mode::Filter => handle_filter_key(key),
-                _ => handle_generic_list_key(key),
-            }
-        }
+        View::EcrList | View::EcsList | View::VpcList => match app.mode {
+            Mode::Filter => handle_filter_key(key),
+            _ => handle_generic_list_key(key),
+        },
+        View::S3List => match app.mode {
+            Mode::Filter => handle_filter_key(key),
+            _ => handle_s3_list_key(key),
+        },
+        View::SecretsList => match app.mode {
+            Mode::Filter => handle_filter_key(key),
+            _ => handle_secrets_list_key(key),
+        },
         View::Ec2Detail => handle_ec2_detail_key(key),
         View::EcrDetail | View::EcsDetail | View::VpcDetail => handle_generic_detail_key(key),
         View::S3Detail => handle_s3_detail_key(key),
@@ -108,6 +116,7 @@ fn handle_ec2_list_key(key: KeyEvent) -> Action {
         KeyCode::Char('R') => Action::Reboot,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('D') => Action::Delete,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
         _ => Action::Noop,
@@ -130,6 +139,54 @@ fn handle_generic_list_key(key: KeyEvent) -> Action {
         KeyCode::Char('/') => Action::StartFilter,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// S3一覧画面(Normalモード)のキー処理
+fn handle_s3_list_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageDown,
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageUp,
+        KeyCode::Enter => Action::Enter,
+        KeyCode::Char('/') => Action::StartFilter,
+        KeyCode::Char('r') => Action::Refresh,
+        KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('c') => Action::Create,
+        KeyCode::Char('D') => Action::Delete,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// Secrets一覧画面(Normalモード)のキー処理
+fn handle_secrets_list_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageDown,
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageUp,
+        KeyCode::Enter => Action::Enter,
+        KeyCode::Char('/') => Action::StartFilter,
+        KeyCode::Char('r') => Action::Refresh,
+        KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('c') => Action::Create,
+        KeyCode::Char('D') => Action::Delete,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
         _ => Action::Noop,
@@ -160,6 +217,7 @@ fn handle_ec2_detail_key(key: KeyEvent) -> Action {
         KeyCode::Tab => Action::SwitchDetailTab,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Enter => Action::FollowLink,
         KeyCode::Char('S') => Action::StartStop,
         KeyCode::Char('R') => Action::Reboot,
         KeyCode::Char('y') => Action::CopyId,
@@ -197,6 +255,7 @@ fn handle_s3_detail_key(key: KeyEvent) -> Action {
         KeyCode::Char('g') => Action::MoveToTop,
         KeyCode::Char('G') => Action::MoveToBottom,
         KeyCode::Enter => Action::Enter,
+        KeyCode::Char('D') => Action::Delete,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
         _ => Action::Noop,
@@ -213,9 +272,41 @@ fn handle_secrets_detail_key(key: KeyEvent) -> Action {
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('e') => Action::Edit,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
         _ => Action::Noop,
+    }
+}
+
+/// フォームモードのキー処理
+fn handle_form_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Enter => Action::FormSubmit,
+        KeyCode::Esc => Action::FormCancel,
+        KeyCode::Tab => Action::FormNextField,
+        _ => {
+            if let Some(req) = to_input_request(&Event::Key(key)) {
+                Action::FormHandleInput(req)
+            } else {
+                Action::Noop
+            }
+        }
+    }
+}
+
+/// 危険操作確認モードのキー処理
+fn handle_danger_confirm_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Enter => Action::DangerConfirmSubmit,
+        KeyCode::Esc => Action::DangerConfirmCancel,
+        _ => {
+            if let Some(req) = to_input_request(&Event::Key(key)) {
+                Action::DangerConfirmHandleInput(req)
+            } else {
+                Action::Noop
+            }
+        }
     }
 }
 
@@ -401,6 +492,7 @@ mod tests {
 
     #[rstest]
     #[case(key(KeyCode::Tab), Action::SwitchDetailTab)]
+    #[case(key(KeyCode::Enter), Action::FollowLink)]
     #[case(key_char('j'), Action::MoveDown)]
     #[case(key(KeyCode::Down), Action::MoveDown)]
     #[case(key_char('k'), Action::MoveUp)]
@@ -528,6 +620,215 @@ mod tests {
         assert_eq!(
             handle_key(&app, key(KeyCode::Enter)),
             Action::DismissMessage
+        );
+    }
+
+    // ──────────────────────────────────────────────
+    // S3リスト画面テスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key_char('/'), Action::StartFilter)]
+    #[case(key_char('r'), Action::Refresh)]
+    #[case(key_char('y'), Action::CopyId)]
+    #[case(key_char('c'), Action::Create)]
+    #[case(key_char('D'), Action::Delete)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    fn handle_key_returns_expected_action_when_s3_list_normal(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_view(View::S3List);
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    // ──────────────────────────────────────────────
+    // Secretsリスト画面テスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key_char('/'), Action::StartFilter)]
+    #[case(key_char('r'), Action::Refresh)]
+    #[case(key_char('y'), Action::CopyId)]
+    #[case(key_char('c'), Action::Create)]
+    #[case(key_char('D'), Action::Delete)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    fn handle_key_returns_expected_action_when_secrets_list_normal(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_view(View::SecretsList);
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    // ──────────────────────────────────────────────
+    // EC2リスト Delete キーテスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn handle_key_returns_delete_when_shift_d_in_ec2_list() {
+        let app = app_with_view(View::Ec2List);
+        assert_eq!(
+            handle_key(&app, KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
+            Action::Delete,
+        );
+    }
+
+    // ──────────────────────────────────────────────
+    // S3詳細 Delete キーテスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn handle_key_returns_delete_when_shift_d_in_s3_detail() {
+        let app = app_with_view(View::S3Detail);
+        assert_eq!(
+            handle_key(&app, KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
+            Action::Delete,
+        );
+    }
+
+    // ──────────────────────────────────────────────
+    // Secrets詳細 Edit キーテスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn handle_key_returns_edit_when_e_in_secrets_detail() {
+        let app = app_with_view(View::SecretsDetail);
+        assert_eq!(handle_key(&app, key_char('e')), Action::Edit);
+    }
+
+    // ──────────────────────────────────────────────
+    // フォームモードテスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key(KeyCode::Enter), Action::FormSubmit)]
+    #[case(key(KeyCode::Esc), Action::FormCancel)]
+    #[case(key(KeyCode::Tab), Action::FormNextField)]
+    fn handle_key_returns_expected_action_when_form_mode(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        use crate::app::{FormContext, FormField, FormKind};
+        use tui_input::Input;
+        let app = app_with_mode(
+            View::S3List,
+            Mode::Form(FormContext {
+                kind: FormKind::CreateS3Bucket,
+                fields: vec![FormField {
+                    label: "Name".to_string(),
+                    input: Input::default(),
+                    required: true,
+                }],
+                focused_field: 0,
+            }),
+        );
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    #[test]
+    fn handle_key_returns_form_handle_input_when_char_in_form() {
+        use crate::app::{FormContext, FormField, FormKind};
+        use tui_input::Input;
+        let app = app_with_mode(
+            View::S3List,
+            Mode::Form(FormContext {
+                kind: FormKind::CreateS3Bucket,
+                fields: vec![FormField {
+                    label: "Name".to_string(),
+                    input: Input::default(),
+                    required: true,
+                }],
+                focused_field: 0,
+            }),
+        );
+        let action = handle_key(&app, key_char('a'));
+        assert!(matches!(action, Action::FormHandleInput(_)));
+    }
+
+    // ──────────────────────────────────────────────
+    // 危険操作確認モードテスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key(KeyCode::Enter), Action::DangerConfirmSubmit)]
+    #[case(key(KeyCode::Esc), Action::DangerConfirmCancel)]
+    fn handle_key_returns_expected_action_when_danger_confirm_mode(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        use crate::app::{DangerAction, DangerConfirmContext};
+        use tui_input::Input;
+        let app = app_with_mode(
+            View::Ec2List,
+            Mode::DangerConfirm(DangerConfirmContext {
+                action: DangerAction::TerminateEc2("i-001".to_string()),
+                input: Input::default(),
+            }),
+        );
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    #[test]
+    fn handle_key_returns_danger_confirm_handle_input_when_char_in_danger_confirm() {
+        use crate::app::{DangerAction, DangerConfirmContext};
+        use tui_input::Input;
+        let app = app_with_mode(
+            View::Ec2List,
+            Mode::DangerConfirm(DangerConfirmContext {
+                action: DangerAction::TerminateEc2("i-001".to_string()),
+                input: Input::default(),
+            }),
+        );
+        let action = handle_key(&app, key_char('i'));
+        assert!(matches!(action, Action::DangerConfirmHandleInput(_)));
+    }
+
+    // ──────────────────────────────────────────────
+    // フォーム/DangerConfirmモーダル優先テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn handle_key_returns_form_submit_when_form_overrides_view_keys() {
+        use crate::app::{FormContext, FormField, FormKind};
+        use tui_input::Input;
+        let app = app_with_mode(
+            View::S3List,
+            Mode::Form(FormContext {
+                kind: FormKind::CreateS3Bucket,
+                fields: vec![FormField {
+                    label: "Name".to_string(),
+                    input: Input::default(),
+                    required: true,
+                }],
+                focused_field: 0,
+            }),
+        );
+        assert_eq!(handle_key(&app, key(KeyCode::Enter)), Action::FormSubmit);
+    }
+
+    #[test]
+    fn handle_key_returns_danger_confirm_submit_when_danger_overrides_view_keys() {
+        use crate::app::{DangerAction, DangerConfirmContext};
+        use tui_input::Input;
+        let app = app_with_mode(
+            View::Ec2List,
+            Mode::DangerConfirm(DangerConfirmContext {
+                action: DangerAction::TerminateEc2("i-001".to_string()),
+                input: Input::default(),
+            }),
+        );
+        assert_eq!(
+            handle_key(&app, key(KeyCode::Enter)),
+            Action::DangerConfirmSubmit
         );
     }
 }

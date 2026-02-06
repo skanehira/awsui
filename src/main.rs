@@ -7,10 +7,13 @@ use awsui::aws::ecs_client::{AwsEcsClient, EcsClient};
 use awsui::aws::s3_client::{AwsS3Client, S3Client};
 use awsui::aws::secrets_client::{AwsSecretsClient, SecretsClient};
 use awsui::aws::vpc_client::{AwsVpcClient, VpcClient};
+use awsui::cli::{Cli, DeletePermissions};
 use awsui::config;
 use awsui::event::AppEvent;
 use awsui::tui::components::dialog::{ConfirmDialog, MessageDialog};
+use awsui::tui::components::form_dialog::{DangerConfirmDialog, FormDialog};
 use awsui::tui::components::help::HelpPopup;
+use clap::Parser;
 use ratatui::Frame;
 use tokio::sync::mpsc;
 
@@ -48,6 +51,11 @@ impl Clients {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 0. CLI引数パース
+    let cli = Cli::parse();
+    let delete_permissions =
+        DeletePermissions::from_cli(cli.allow_delete.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
+
     // 1. SSOプロファイル読み込み
     let profiles = config::load_sso_profiles()?;
     let profile_names = config::profile_names(&profiles);
@@ -58,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 2. App初期化
-    let mut app = App::new(profile_names.clone());
+    let mut app = App::with_delete_permissions(profile_names.clone(), delete_permissions);
 
     // 3. ターミナル初期化
     crossterm::terminal::enable_raw_mode()?;
@@ -76,11 +84,15 @@ async fn main() -> anyhow::Result<()> {
     loop {
         tokio::select! {
             Some(event) = app.event_rx.recv() => {
-                let needs_refresh = matches!(&event, AppEvent::ActionCompleted(Ok(_)));
+                let needs_ec2_refresh = matches!(&event, AppEvent::ActionCompleted(Ok(_)));
+                let needs_crud_refresh = matches!(&event, AppEvent::CrudCompleted(Ok(_)));
                 app.handle_event(event);
-                if needs_refresh
+                if needs_ec2_refresh
                     && let Some(client) = &clients.ec2 {
                     load_instances(&app.event_tx, client.clone());
+                }
+                if needs_crud_refresh {
+                    trigger_refresh(&app, &clients);
                 }
             }
             maybe_event = futures::StreamExt::next(&mut event_stream) => {
@@ -262,6 +274,14 @@ fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
         Mode::Help => {
             let help = HelpPopup::new();
             frame.render_widget(help, frame.area());
+        }
+        Mode::Form(ctx) => {
+            let dialog = FormDialog::new(ctx);
+            frame.render_widget(dialog, frame.area());
+        }
+        Mode::DangerConfirm(ctx) => {
+            let dialog = DangerConfirmDialog::new(ctx);
+            frame.render_widget(dialog, frame.area());
         }
         _ => {}
     }
@@ -495,6 +515,85 @@ async fn handle_side_effects(
         return;
     }
 
+    // ナビゲーションリンク（EC2 Detail → VPC Detail）
+    if app.loading && app.view == View::VpcDetail && *prev_view == View::Ec2Detail {
+        if let Some(target_id) = app.navigate_target_id.take() {
+            // VPCクライアントがない場合は作成
+            if clients.vpc.is_none() {
+                let Some(profile_name) = &app.profile else {
+                    return;
+                };
+                let region = app
+                    .region
+                    .clone()
+                    .unwrap_or_else(|| "ap-northeast-1".to_string());
+                match AwsVpcClient::new(profile_name, &region).await {
+                    Ok(client) => {
+                        clients.vpc = Some(Arc::new(client));
+                    }
+                    Err(e) => {
+                        // クライアント作成失敗時はスタックを巻き戻す
+                        if let Some(entry) = app.navigation_stack.pop() {
+                            app.view = entry.view;
+                            app.selected_index = entry.selected_index;
+                            app.detail_tag_index = entry.detail_tag_index;
+                            app.detail_tab = entry.detail_tab;
+                        }
+                        app.loading = false;
+                        app.show_message(awsui::app::MessageLevel::Error, "Error", e.to_string());
+                        return;
+                    }
+                }
+            }
+            if let Some(client) = &clients.vpc {
+                let tx = app.event_tx.clone();
+                let c = client.clone();
+                let tid = target_id.clone();
+                tokio::spawn(async move {
+                    // VPCリストを取得し、ターゲットのVPC IDまたはSubnet IDに該当するVPCを特定
+                    let vpcs_result = c.describe_vpcs().await;
+                    match vpcs_result {
+                        Ok(vpcs) => {
+                            // target_idがsubnet-で始まる場合はsubnet_idから該当VPCを探す
+                            let vpc_id = if tid.starts_with("subnet-") {
+                                // まず全VPCのサブネットを取得して、該当するものを探す
+                                // 簡易的にVPC一覧から全サブネットを取得
+                                let mut found_vpc_id = None;
+                                for vpc in &vpcs {
+                                    if let Ok(subnets) = c.describe_subnets(&vpc.vpc_id).await
+                                        && subnets.iter().any(|s| s.subnet_id == tid)
+                                    {
+                                        found_vpc_id = Some(vpc.vpc_id.clone());
+                                        break;
+                                    }
+                                }
+                                found_vpc_id.unwrap_or(tid)
+                            } else {
+                                tid
+                            };
+                            // 該当VPCのサブネットを取得
+                            let subnets_result = c.describe_subnets(&vpc_id).await;
+                            match subnets_result {
+                                Ok(subnets) => {
+                                    let _ = tx
+                                        .send(AppEvent::NavigateVpcLoaded(Ok((vpcs, subnets))))
+                                        .await;
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(AppEvent::NavigateVpcLoaded(Err(e))).await;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::NavigateVpcLoaded(Err(e))).await;
+                        }
+                    }
+                });
+            }
+        }
+        return;
+    }
+
     // リフレッシュ（既にリストビューにいて loading が true の場合）
     if app.loading && confirmed.is_none() && is_list_view(&app.view) && *prev_view == app.view {
         match app.view {
@@ -597,6 +696,210 @@ async fn handle_side_effects(
                 });
             }
         }
+    }
+
+    // フォーム送信 → CRUD API呼び出し
+    if let Some(form_ctx) = app.pending_form.take() {
+        handle_form_side_effect(app, clients, form_ctx);
+    }
+
+    // 危険操作確認 → CRUD API呼び出し
+    if let Some(danger_action) = app.pending_danger_action.take() {
+        handle_danger_side_effect(app, clients, danger_action);
+    }
+}
+
+fn handle_form_side_effect(app: &mut App, clients: &Clients, form_ctx: awsui::app::FormContext) {
+    use awsui::app::FormKind;
+    let tx = app.event_tx.clone();
+    let values: Vec<String> = form_ctx
+        .fields
+        .iter()
+        .map(|f| f.input.value().to_string())
+        .collect();
+
+    match form_ctx.kind {
+        FormKind::CreateS3Bucket => {
+            if let Some(client) = &clients.s3 {
+                let c = client.clone();
+                let bucket_name = values[0].clone();
+                tokio::spawn(async move {
+                    let result = c.create_bucket(&bucket_name).await;
+                    let event = match result {
+                        Ok(()) => {
+                            AppEvent::CrudCompleted(Ok(format!("Bucket '{}' created", bucket_name)))
+                        }
+                        Err(e) => AppEvent::CrudCompleted(Err(e)),
+                    };
+                    let _ = tx.send(event).await;
+                });
+            }
+        }
+        FormKind::CreateSecret => {
+            if let Some(client) = &clients.secrets {
+                let c = client.clone();
+                let name = values[0].clone();
+                let value = values[1].clone();
+                let description = if values.len() > 2 && !values[2].is_empty() {
+                    Some(values[2].clone())
+                } else {
+                    None
+                };
+                tokio::spawn(async move {
+                    let result = c.create_secret(&name, &value, description).await;
+                    let event = match result {
+                        Ok(()) => AppEvent::CrudCompleted(Ok(format!("Secret '{}' created", name))),
+                        Err(e) => AppEvent::CrudCompleted(Err(e)),
+                    };
+                    let _ = tx.send(event).await;
+                });
+            }
+        }
+        FormKind::UpdateSecretValue => {
+            if let Some(client) = &clients.secrets {
+                let c = client.clone();
+                let secret_id = app
+                    .secret_detail
+                    .as_ref()
+                    .map(|d| d.arn.clone())
+                    .unwrap_or_default();
+                let new_value = values[0].clone();
+                tokio::spawn(async move {
+                    let result = c.update_secret_value(&secret_id, &new_value).await;
+                    let event = match result {
+                        Ok(()) => AppEvent::CrudCompleted(Ok("Secret value updated".to_string())),
+                        Err(e) => AppEvent::CrudCompleted(Err(e)),
+                    };
+                    let _ = tx.send(event).await;
+                });
+            }
+        }
+    }
+}
+
+fn handle_danger_side_effect(
+    app: &mut App,
+    clients: &Clients,
+    danger_action: awsui::app::DangerAction,
+) {
+    use awsui::app::DangerAction;
+    let tx = app.event_tx.clone();
+
+    match danger_action {
+        DangerAction::TerminateEc2(id) => {
+            if let Some(client) = &clients.ec2 {
+                let c = client.clone();
+                tokio::spawn(async move {
+                    let result = c.terminate_instances(std::slice::from_ref(&id)).await;
+                    let event = match result {
+                        Ok(()) => {
+                            AppEvent::CrudCompleted(Ok(format!("Instance {} terminated", id)))
+                        }
+                        Err(e) => AppEvent::CrudCompleted(Err(e)),
+                    };
+                    let _ = tx.send(event).await;
+                });
+            }
+        }
+        DangerAction::DeleteS3Bucket(name) => {
+            if let Some(client) = &clients.s3 {
+                let c = client.clone();
+                tokio::spawn(async move {
+                    let result = c.delete_bucket(&name).await;
+                    let event = match result {
+                        Ok(()) => AppEvent::CrudCompleted(Ok(format!("Bucket '{}' deleted", name))),
+                        Err(e) => AppEvent::CrudCompleted(Err(e)),
+                    };
+                    let _ = tx.send(event).await;
+                });
+            }
+        }
+        DangerAction::DeleteS3Object { bucket, key } => {
+            if let Some(client) = &clients.s3 {
+                let c = client.clone();
+                tokio::spawn(async move {
+                    let result = c.delete_object(&bucket, &key).await;
+                    let event = match result {
+                        Ok(()) => AppEvent::CrudCompleted(Ok(format!("Object '{}' deleted", key))),
+                        Err(e) => AppEvent::CrudCompleted(Err(e)),
+                    };
+                    let _ = tx.send(event).await;
+                });
+            }
+        }
+        DangerAction::DeleteSecret(name) => {
+            if let Some(client) = &clients.secrets {
+                let c = client.clone();
+                tokio::spawn(async move {
+                    let result = c.delete_secret(&name).await;
+                    let event = match result {
+                        Ok(()) => AppEvent::CrudCompleted(Ok(format!("Secret '{}' deleted", name))),
+                        Err(e) => AppEvent::CrudCompleted(Err(e)),
+                    };
+                    let _ = tx.send(event).await;
+                });
+            }
+        }
+    }
+}
+
+/// CRUD完了後にリストをリフレッシュする
+fn trigger_refresh(app: &App, clients: &Clients) {
+    let tx = app.event_tx.clone();
+    match app.view {
+        View::Ec2List => {
+            if let Some(client) = &clients.ec2 {
+                load_instances(&tx, client.clone());
+            }
+        }
+        View::S3List => {
+            if let Some(client) = &clients.s3 {
+                let c = client.clone();
+                tokio::spawn(async move {
+                    let result = c.list_buckets().await;
+                    let _ = tx.send(AppEvent::BucketsLoaded(result)).await;
+                });
+            }
+        }
+        View::S3Detail => {
+            if let Some(client) = &clients.s3 {
+                let c = client.clone();
+                let bucket = app.s3_selected_bucket.clone().unwrap_or_default();
+                let prefix = if app.s3_current_prefix.is_empty() {
+                    None
+                } else {
+                    Some(app.s3_current_prefix.clone())
+                };
+                tokio::spawn(async move {
+                    let result = c.list_objects(&bucket, prefix).await;
+                    let _ = tx.send(AppEvent::ObjectsLoaded(result)).await;
+                });
+            }
+        }
+        View::SecretsList => {
+            if let Some(client) = &clients.secrets {
+                let c = client.clone();
+                tokio::spawn(async move {
+                    let result = c.list_secrets().await;
+                    let _ = tx.send(AppEvent::SecretsLoaded(result)).await;
+                });
+            }
+        }
+        View::SecretsDetail => {
+            if let Some(client) = &clients.secrets
+                && let Some(detail) = &app.secret_detail
+            {
+                let c = client.clone();
+                let secret_id = detail.arn.clone();
+                tokio::spawn(async move {
+                    let result = c.describe_secret(&secret_id).await;
+                    let _ = tx
+                        .send(AppEvent::SecretDetailLoaded(result.map(Box::new)))
+                        .await;
+                });
+            }
+        }
+        _ => {}
     }
 }
 
