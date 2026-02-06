@@ -1,3 +1,5 @@
+use tui_input::InputRequest;
+
 /// UIアクション。キー入力から変換され、App状態を更新する。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -15,10 +17,7 @@ pub enum Action {
     StartFilter,
     ConfirmFilter,
     CancelFilter,
-    FilterInput(char),
-    FilterDeleteChar,
-    FilterDeleteWord,
-    FilterClearLine,
+    FilterHandleInput(InputRequest),
     StartStop,
     Reboot,
     ConfirmYes,
