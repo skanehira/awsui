@@ -5,8 +5,8 @@ expression: buffer_to_string(&terminal)
 ┌ web-01 (i-0abc1234) ─────────────────────────── dev-account │ ap-northeast-1 ┐
 │ [Overview] [Tags]                                                            │
 │┌ Instance ───────────────────────────┐┌ Network ────────────────────────────┐│
-││  ID          i-0abc1234             ││  VPC         vpc-abc123             ││
-││  Name        web-01                 ││  Subnet      subnet-def456          ││
+││  ID          i-0abc1234             ││  VPC         vpc-abc123 →           ││
+││  Name        web-01                 ││  Subnet      subnet-def456 →        ││
 ││  Type        t3.micro               ││  Private IP  10.0.1.42              ││
 ││  State       ● running              ││  Public IP   54.210.3.15            ││
 ││  AMI         ami-0abcdef123         ││  AZ          ap-northeast-1a        ││
@@ -26,4 +26,4 @@ expression: buffer_to_string(&terminal)
 ││                                                                            ││
 │└────────────────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────────────┘
- Tab:switch-tab S:start/stop R:reboot y:copy-id Esc:back
+ Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot y:copy-id Esc

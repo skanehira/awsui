@@ -1,9 +1,10 @@
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Wrap};
 
-use crate::app::{App, DetailTab};
+use crate::app::{App, DetailTab, Ec2DetailField};
 use crate::aws::model::Instance;
 use crate::tui::components::status_bar::StatusBar;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
@@ -18,8 +19,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     ])
     .split(area);
 
-    // 外枠Block
-    let title = if let Some(instance) = app.selected_instance() {
+    // 外枠Block（パンくずリスト対応）
+    let title = if let Some(breadcrumb) = app.breadcrumb() {
+        format!(" {} ", breadcrumb)
+    } else if let Some(instance) = app.selected_instance() {
         format!(" {} ({}) ", instance.name, instance.instance_id)
     } else {
         " EC2 Detail ".to_string()
@@ -46,14 +49,18 @@ pub fn render(frame: &mut Frame, app: &App) {
     // コンテンツ
     if let Some(instance) = app.selected_instance() {
         match app.detail_tab {
-            DetailTab::Overview => render_overview(frame, instance, inner_chunks[1]),
+            DetailTab::Overview => {
+                render_overview(frame, instance, app.detail_tag_index, inner_chunks[1]);
+            }
             DetailTab::Tags => render_tags(frame, instance, app.detail_tag_index, inner_chunks[1]),
         }
     }
 
     // ステータスバー
     let keybinds = match app.detail_tab {
-        DetailTab::Overview => "Tab:switch-tab S:start/stop R:reboot y:copy-id Esc:back",
+        DetailTab::Overview => {
+            "Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot y:copy-id Esc:back"
+        }
         DetailTab::Tags => "Tab:switch-tab y:copy-value Esc:back",
     };
     let status = StatusBar::new(keybinds);
@@ -101,7 +108,7 @@ fn render_tab_bar(frame: &mut Frame, current_tab: &DetailTab, area: Rect) {
 }
 
 /// Overviewタブを描画
-fn render_overview(frame: &mut Frame, instance: &Instance, area: Rect) {
+fn render_overview(frame: &mut Frame, instance: &Instance, selected_field: usize, area: Rect) {
     let chunks = Layout::vertical([
         Constraint::Min(1),    // Instance + Network
         Constraint::Length(5), // Storage
@@ -130,16 +137,29 @@ fn render_overview(frame: &mut Frame, instance: &Instance, area: Rect) {
         .wrap(Wrap { trim: false });
     frame.render_widget(instance_para, h_chunks[0]);
 
-    // Network情報
+    // Network情報（リンク可能フィールド付き）
     let network_block = Block::default().title(" Network ").borders(Borders::ALL);
     let sg_text = if instance.security_groups.is_empty() {
         "-".to_string()
     } else {
         instance.security_groups.join(", ")
     };
+
+    // リンク可能フィールドの生成
+    let link_fields = Ec2DetailField::ALL;
     let network_lines = vec![
-        detail_line("VPC", instance.vpc_id.as_deref().unwrap_or("-")),
-        detail_line("Subnet", instance.subnet_id.as_deref().unwrap_or("-")),
+        linkable_detail_line(
+            "VPC",
+            instance.vpc_id.as_deref().unwrap_or("-"),
+            instance.vpc_id.is_some(),
+            selected_field == 0 && link_fields.contains(&Ec2DetailField::VpcId),
+        ),
+        linkable_detail_line(
+            "Subnet",
+            instance.subnet_id.as_deref().unwrap_or("-"),
+            instance.subnet_id.is_some(),
+            selected_field == 1 && link_fields.contains(&Ec2DetailField::SubnetId),
+        ),
         detail_line("Private IP", instance.private_ip.as_deref().unwrap_or("-")),
         detail_line("Public IP", instance.public_ip.as_deref().unwrap_or("-")),
         detail_line("AZ", &instance.availability_zone),
@@ -195,6 +215,28 @@ fn detail_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("  {:<12}", label), theme::header()),
         Span::raw(value),
+    ])
+}
+
+/// リンク可能フィールドの1行を生成
+fn linkable_detail_line<'a>(
+    label: &'a str,
+    value: &'a str,
+    has_link: bool,
+    selected: bool,
+) -> Line<'a> {
+    let marker = if has_link { " →" } else { "" };
+    let style = if selected {
+        Style::default()
+            .fg(ratatui::style::Color::Black)
+            .bg(ratatui::style::Color::Cyan)
+    } else {
+        Style::default()
+    };
+
+    Line::from(vec![
+        Span::styled(format!("  {:<12}", label), theme::header().patch(style)),
+        Span::styled(format!("{}{}", value, marker), style),
     ])
 }
 
