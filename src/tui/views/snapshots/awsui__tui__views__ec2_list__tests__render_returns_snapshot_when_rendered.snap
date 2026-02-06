@@ -1,0 +1,19 @@
+---
+source: src/tui/views/ec2_list.rs
+expression: buffer_to_string(&terminal)
+---
+┌ EC2 Instances ───────────────────────────────── dev-account │ ap-northeast-1 ┐
+│Instance ID          Name            State          Type         AZ           │
+│i-0abc1234           web-01          ● running      t3.micro     ap-northeast-│
+│i-0def5678           api-01          ○ stopped      t3.micro     ap-northeast-│
+│i-0ghi9012           batch-01        ◐ pending      t3.micro     ap-northeast-│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Enter:detail S:start/stop R:reboot /:filter ?:help

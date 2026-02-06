@@ -1,0 +1,19 @@
+---
+source: src/tui/views/profile_select.rs
+expression: buffer_to_string(&terminal)
+---
+┌ Select AWS SSO Profile ──────────────────────────────────┐
+│                                                          │
+│                                                          │
+│                                                          │
+│  ▶ dev-account                                           │
+│    staging-account                                       │
+│    prod-account                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+ j/k:select  Enter:confirm  q:quit

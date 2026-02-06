@@ -1,0 +1,29 @@
+---
+source: src/tui/views/ec2_detail.rs
+expression: buffer_to_string(&terminal)
+---
+┌ web-01 (i-0abc1234) ─────────────────────────── dev-account │ ap-northeast-1 ┐
+│ [Overview] [Tags]                                                            │
+│┌ Instance ───────────────────────────┐┌ Network ────────────────────────────┐│
+││  ID          i-0abc1234             ││  VPC         vpc-abc123             ││
+││  Name        web-01                 ││  Subnet      subnet-def456          ││
+││  Type        t3.micro               ││  Private IP  10.0.1.42              ││
+││  State       ● running              ││  Public IP   54.210.3.15            ││
+││  AMI         ami-0abcdef123         ││  AZ          ap-northeast-1a        ││
+││  Key         my-keypair             ││  SG          sg-789012              ││
+││  Platform    Linux/UNIX             ││                                     ││
+││  Launch      2025-01-10 09:30       ││                                     ││
+││                                     ││                                     ││
+││                                     ││                                     ││
+││                                     ││                                     ││
+││                                     ││                                     ││
+││                                     ││                                     ││
+││                                     ││                                     ││
+│└─────────────────────────────────────┘└─────────────────────────────────────┘│
+│┌ Storage ───────────────────────────────────────────────────────────────────┐│
+││  vol-abc123  gp3  20GB  /dev/xvda  attached                                ││
+││  vol-def456  gp3  100GB  /dev/xvdf  attached                               ││
+││                                                                            ││
+│└────────────────────────────────────────────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────────────────┘
+ Tab:switch-tab S:start/stop R:reboot y:copy-id Esc:back
