@@ -1,13 +1,4 @@
-use clap::Parser;
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[arg(short, long)]
-    name: String,
-}
-
+// TODO: implement main entry point with terminal init, event loop, and cleanup
 fn main() {
-    let args = Args::parse();
-    println!("Hello, {}!", args.name);
+    println!("awsui - AWS Dashboard TUI");
 }

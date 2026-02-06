@@ -1,7 +1,7 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod action;
+pub mod app;
+pub mod aws;
+pub mod config;
+pub mod error;
+pub mod event;
+pub mod tui;
