@@ -272,7 +272,7 @@ fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
             }
         }
         Mode::Help => {
-            let help = HelpPopup::new();
+            let help = HelpPopup::new(&app.view);
             frame.render_widget(help, frame.area());
         }
         Mode::Form(ctx) => {
