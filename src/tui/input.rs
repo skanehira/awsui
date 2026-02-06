@@ -18,11 +18,21 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
     // View別のハンドリング
     match app.view {
         View::ProfileSelect => handle_profile_select_key(key),
+        View::ServiceSelect => handle_service_select_key(key),
         View::Ec2List => match app.mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_ec2_list_key(key),
         },
+        View::EcrList | View::EcsList | View::S3List | View::VpcList | View::SecretsList => {
+            match app.mode {
+                Mode::Filter => handle_filter_key(key),
+                _ => handle_generic_list_key(key),
+            }
+        }
         View::Ec2Detail => handle_ec2_detail_key(key),
+        View::EcrDetail | View::EcsDetail | View::VpcDetail => handle_generic_detail_key(key),
+        View::S3Detail => handle_s3_detail_key(key),
+        View::SecretsDetail => handle_secrets_detail_key(key),
     }
 }
 
@@ -65,6 +75,21 @@ fn handle_profile_select_key(key: KeyEvent) -> Action {
     }
 }
 
+/// サービス選択画面のキー処理
+fn handle_service_select_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Enter => Action::Enter,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
 /// EC2一覧画面(Normalモード)のキー処理
 fn handle_ec2_list_key(key: KeyEvent) -> Action {
     if is_quit_key(&key) {
@@ -89,7 +114,29 @@ fn handle_ec2_list_key(key: KeyEvent) -> Action {
     }
 }
 
-/// EC2一覧画面(Filterモード)のキー処理
+/// 汎用リストビュー(Normalモード)のキー処理 (ECR, ECS, S3, VPC, Secrets)
+fn handle_generic_list_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageDown,
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageUp,
+        KeyCode::Enter => Action::Enter,
+        KeyCode::Char('/') => Action::StartFilter,
+        KeyCode::Char('r') => Action::Refresh,
+        KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// フィルタモードのキー処理
 fn handle_filter_key(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Enter => Action::ConfirmFilter,
@@ -115,6 +162,56 @@ fn handle_ec2_detail_key(key: KeyEvent) -> Action {
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Char('S') => Action::StartStop,
         KeyCode::Char('R') => Action::Reboot,
+        KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// 汎用詳細画面のキー処理 (ECR Detail, ECS Detail, VPC Detail)
+fn handle_generic_detail_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// S3詳細画面のキー処理
+fn handle_s3_detail_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Enter => Action::Enter,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// Secrets詳細画面のキー処理
+fn handle_secrets_detail_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Tab => Action::SwitchDetailTab,
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Char('y') => Action::CopyId,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
@@ -186,6 +283,28 @@ mod tests {
     }
 
     // ──────────────────────────────────────────────
+    // サービス選択画面テスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key(KeyCode::Down), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key(KeyCode::Up), Action::MoveUp)]
+    #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    #[case(key_char('?'), Action::ShowHelp)]
+    #[case(key_char('x'), Action::Noop)]
+    fn handle_key_returns_expected_action_when_service_select(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_view(View::ServiceSelect);
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    // ──────────────────────────────────────────────
     // EC2一覧画面(Normalモード)テスト
     // ──────────────────────────────────────────────
 
@@ -224,6 +343,27 @@ mod tests {
     fn handle_key_returns_half_page_up_when_ctrl_u_in_ec2_list() {
         let app = app_with_view(View::Ec2List);
         assert_eq!(handle_key(&app, key_with_ctrl('u')), Action::HalfPageUp);
+    }
+
+    // ──────────────────────────────────────────────
+    // 汎用リスト画面テスト (ECR)
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key_char('/'), Action::StartFilter)]
+    #[case(key_char('r'), Action::Refresh)]
+    #[case(key_char('y'), Action::CopyId)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    fn handle_key_returns_expected_action_when_ecr_list_normal(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_view(View::EcrList);
+        assert_eq!(handle_key(&app, input), expected);
     }
 
     // ──────────────────────────────────────────────
@@ -277,6 +417,43 @@ mod tests {
         #[case] expected: Action,
     ) {
         let app = app_with_view(View::Ec2Detail);
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    // ──────────────────────────────────────────────
+    // S3詳細画面テスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    fn handle_key_returns_expected_action_when_s3_detail(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_view(View::S3Detail);
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    // ──────────────────────────────────────────────
+    // Secrets詳細画面テスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key(KeyCode::Tab), Action::SwitchDetailTab)]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key_char('y'), Action::CopyId)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    fn handle_key_returns_expected_action_when_secrets_detail(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_view(View::SecretsDetail);
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -338,7 +515,6 @@ mod tests {
 
     #[test]
     fn handle_key_returns_confirm_yes_when_confirm_dialog_overrides_view_keys() {
-        // 確認ダイアログ中は 'y' が ConfirmYes になる（CopyIdではなく）
         let app = app_with_mode(
             View::Ec2List,
             Mode::Confirm(ConfirmAction::Start("i-123".to_string())),
@@ -348,7 +524,6 @@ mod tests {
 
     #[test]
     fn handle_key_returns_dismiss_message_when_message_overrides_view_keys() {
-        // メッセージダイアログ中は Enter が DismissMessage になる（Enter/詳細ではなく）
         let app = app_with_mode(View::Ec2List, Mode::Message);
         assert_eq!(
             handle_key(&app, key(KeyCode::Enter)),
