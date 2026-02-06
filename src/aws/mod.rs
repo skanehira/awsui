@@ -1,2 +1,12 @@
 pub mod client;
+pub mod ecr_client;
+pub mod ecr_model;
+pub mod ecs_client;
+pub mod ecs_model;
 pub mod model;
+pub mod s3_client;
+pub mod s3_model;
+pub mod secrets_client;
+pub mod secrets_model;
+pub mod vpc_client;
+pub mod vpc_model;
