@@ -1,7 +1,9 @@
 pub mod action;
 pub mod app;
 pub mod aws;
+pub mod cli;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod fuzzy;
 pub mod tui;
