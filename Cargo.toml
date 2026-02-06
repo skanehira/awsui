@@ -9,6 +9,10 @@ anyhow = "1"
 async-trait = "0.1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-ec2 = "1"
+aws-sdk-ecr = "1"
+aws-sdk-ecs = "1"
+aws-sdk-s3 = "1"
+aws-sdk-secretsmanager = "1"
 clap = { version = "4", features = ["derive"] }
 cli-clipboard = "0.4"
 crossterm = { version = "0.28", features = ["event-stream"] }
