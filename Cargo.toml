@@ -11,11 +11,12 @@ aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-ec2 = "1"
 clap = { version = "4", features = ["derive"] }
 cli-clipboard = "0.4"
-crossterm = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
 futures = "0.3"
 ratatui = "0.29"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tui-input = { version = "0.11.1", features = ["crossterm"] }
 
 [dev-dependencies]
 insta = "1.46"
