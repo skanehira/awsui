@@ -1,0 +1,19 @@
+---
+source: src/tui/views/ecs_list.rs
+expression: buffer_to_string(&terminal)
+---
+┌ ECS Clusters (3) ──────────────────────────────────────────────────────────────────────────────────────────┐
+│Cluster Name             Status       Running Tasks   Pending Tasks   Active Services   Container Instances │
+│web-cluster              ACTIVE       10              2               2                 3                   │
+│batch-cluster            ACTIVE       3               0               2                 3                   │
+│dev-cluster              INACTIVE     0               0               2                 3                   │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Enter:detail /:filter ?:help Esc:back

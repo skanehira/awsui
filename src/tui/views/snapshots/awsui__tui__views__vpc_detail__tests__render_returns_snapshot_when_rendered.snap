@@ -1,0 +1,19 @@
+---
+source: src/tui/views/vpc_detail.rs
+expression: buffer_to_string(&terminal)
+---
+┌ main-vpc (vpc-0abc1234) - Subnets ─────────────────────────────────────────────────────────────────────────────────────────────┐
+│Subnet ID               Name                 CIDR               AZ               Available IPs  State        Default  Public IP │
+│subnet-0abc1234         public-1a            10.0.1.0/24        ap-northeast-1a  251            available    No       Yes       │
+│subnet-0def5678         private-1c           10.0.2.0/24        ap-northeast-1c  250            available    Yes      No        │
+│subnet-0ghi9012         private-1d           10.0.3.0/24        ap-northeast-1d  248            available    No       No        │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ j/k:move y:copy-id Esc:back ?:help

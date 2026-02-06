@@ -1,0 +1,19 @@
+---
+source: src/tui/views/ecr_list.rs
+expression: buffer_to_string(&terminal)
+---
+┌ ECR Repositories ──────────────────────────────────────────────────────────── dev-account │ ap-northeast-1 ┐
+│Repository Name           URI                                        Tag Mutability   Created               │
+│my-app                    123456789012.dkr.ecr.ap-northeast-1.amazon MUTABLE          2025-01-10T09:30:00Z  │
+│api-server                123456789012.dkr.ecr.ap-northeast-1.amazon MUTABLE          2025-01-10T09:30:00Z  │
+│batch-job                 123456789012.dkr.ecr.ap-northeast-1.amazon MUTABLE          2025-01-10T09:30:00Z  │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Enter:images /:filter ?:help Esc:back

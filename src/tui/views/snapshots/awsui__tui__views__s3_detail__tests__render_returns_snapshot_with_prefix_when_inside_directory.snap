@@ -1,0 +1,16 @@
+---
+source: src/tui/views/s3_detail.rs
+expression: buffer_to_string(&terminal)
+---
+┌ my-prod-bucket / logs/2025/ ──────────────────────────────────────────────── 3 objects ┐
+│Key                                 Size         Last Modified          Storage Class   │
+│📁  sub/                             -            2025-01-15T10:30:00Z   STANDARD        │
+│📄  file1.log                        4.0 KB       2025-01-15T10:30:00Z   STANDARD        │
+│📄  file2.log                        8.0 KB       2025-01-15T10:30:00Z   STANDARD        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Enter:open Esc:back ?:help

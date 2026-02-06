@@ -1,3 +1,14 @@
 pub mod ec2_detail;
 pub mod ec2_list;
+pub mod ecr_detail;
+pub mod ecr_list;
+pub mod ecs_detail;
+pub mod ecs_list;
 pub mod profile_select;
+pub mod s3_detail;
+pub mod s3_list;
+pub mod secrets_detail;
+pub mod secrets_list;
+pub mod service_select;
+pub mod vpc_detail;
+pub mod vpc_list;

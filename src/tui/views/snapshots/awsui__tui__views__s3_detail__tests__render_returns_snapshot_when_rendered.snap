@@ -1,0 +1,19 @@
+---
+source: src/tui/views/s3_detail.rs
+expression: buffer_to_string(&terminal)
+---
+┌ my-prod-bucket ───────────────────────────────────────────────────────────── 5 objects ┐
+│Key                                 Size         Last Modified          Storage Class   │
+│📁  images/                          -            2025-01-15T10:30:00Z   STANDARD        │
+│📁  logs/                            -            2025-01-15T10:30:00Z   STANDARD        │
+│📄  config.json                      256 B        2025-01-15T10:30:00Z   STANDARD        │
+│📄  data.csv                         1.0 MB       2025-01-15T10:30:00Z   STANDARD        │
+│📄  backup.tar.gz                    5.0 GB       2025-01-15T10:30:00Z   STANDARD        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Enter:open Esc:back ?:help

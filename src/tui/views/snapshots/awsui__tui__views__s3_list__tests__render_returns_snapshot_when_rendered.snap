@@ -1,0 +1,19 @@
+---
+source: src/tui/views/s3_list.rs
+expression: buffer_to_string(&terminal)
+---
+┌ S3 Buckets ──────────────────────────────────── dev-account │ ap-northeast-1 ┐
+│Bucket Name                                    Creation Date                  │
+│web-assets-prod                                2024-01-15T10:30:00Z           │
+│logs-archive                                   2023-06-20T08:00:00Z           │
+│data-pipeline                                  2025-03-01T14:45:00Z           │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Enter:detail /:filter ?:help Esc:back

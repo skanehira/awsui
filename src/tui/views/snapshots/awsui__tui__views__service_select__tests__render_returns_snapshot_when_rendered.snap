@@ -1,0 +1,19 @@
+---
+source: src/tui/views/service_select.rs
+expression: buffer_to_string(&terminal)
+---
+┌ Select AWS Service ──────────────────────────────────────┐
+│                                                          │
+│                                                          │
+│                                                          │
+│  ▶ EC2                                                   │
+│    ECR                                                   │
+│    ECS                                                   │
+│    S3                                                    │
+│    VPC                                                   │
+│    Secrets Manager                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+ j/k:select  Enter:confirm  Esc:back  q:quit

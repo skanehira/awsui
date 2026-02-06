@@ -1,0 +1,24 @@
+---
+source: src/tui/views/ecs_detail.rs
+expression: buffer_to_string(&terminal)
+---
+┌ web-cluster ───────────────────────────────────────────────────────────────────────────────────────────────┐
+│┌ Cluster Info ────────────────────────────────────────────────────────────────────────────────────────────┐│
+││  Status          ACTIVE                                                                                  ││
+││  Running Tasks   10                                                                                      ││
+││  Pending Tasks   2                                                                                       ││
+│└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘│
+│Service Name         Status     Desired   Running   Pending   Task Definition                Launch Type    │
+│api-service          ACTIVE     3         3         0         arn:aws:ecs:ap-northeast-1:123 FARGATE        │
+│worker-service       ACTIVE     2         1         0         arn:aws:ecs:ap-northeast-1:123 FARGATE        │
+│cron-service         DRAINING   1         0         0         arn:aws:ecs:ap-northeast-1:123 FARGATE        │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Esc:back ?:help
