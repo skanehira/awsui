@@ -27,25 +27,29 @@ fn aws_config_path() -> Result<PathBuf, AppError> {
 }
 
 fn parse_sso_profiles(content: &str) -> Vec<SsoProfile> {
+    // 1. sso-session セクションを先にパース
+    let sso_sessions = parse_sso_sessions(content);
+
+    // 2. プロファイルをパース
     let mut profiles = Vec::new();
     let mut current_name: Option<String> = None;
     let mut current_region: Option<String> = None;
     let mut current_sso_url: Option<String> = None;
+    let mut current_sso_session: Option<String> = None;
 
     for line in content.lines() {
         let line = line.trim();
 
         if line.starts_with('[') && line.ends_with(']') {
             // 前のプロファイルを保存
-            if let (Some(name), Some(sso_url)) = (current_name.take(), current_sso_url.take()) {
-                profiles.push(SsoProfile {
-                    name,
-                    region: current_region.take(),
-                    sso_start_url: sso_url,
-                });
-            }
-            current_region = None;
-            current_sso_url = None;
+            flush_profile(
+                &mut profiles,
+                &sso_sessions,
+                current_name.take(),
+                current_region.take(),
+                current_sso_url.take(),
+                current_sso_session.take(),
+            );
 
             let section = line.trim_matches(|c| c == '[' || c == ']');
             current_name = if let Some(name) = section.strip_prefix("profile ") {
@@ -66,21 +70,118 @@ fn parse_sso_profiles(content: &str) -> Vec<SsoProfile> {
             match key {
                 "region" => current_region = Some(value.to_string()),
                 "sso_start_url" => current_sso_url = Some(value.to_string()),
+                "sso_session" => current_sso_session = Some(value.to_string()),
                 _ => {}
             }
         }
     }
 
     // 最後のプロファイルを保存
-    if let (Some(name), Some(sso_url)) = (current_name, current_sso_url) {
-        profiles.push(SsoProfile {
-            name,
-            region: current_region,
-            sso_start_url: sso_url,
-        });
-    }
+    flush_profile(
+        &mut profiles,
+        &sso_sessions,
+        current_name,
+        current_region,
+        current_sso_url,
+        current_sso_session,
+    );
 
     profiles
+}
+
+/// sso-session セクション情報
+struct SsoSessionInfo {
+    sso_start_url: String,
+    sso_region: Option<String>,
+}
+
+/// [sso-session xxx] セクションをパースしてマップを返す
+fn parse_sso_sessions(content: &str) -> std::collections::HashMap<String, SsoSessionInfo> {
+    let mut sessions = std::collections::HashMap::new();
+    let mut current_session: Option<String> = None;
+    let mut current_url: Option<String> = None;
+    let mut current_region: Option<String> = None;
+
+    for line in content.lines() {
+        let line = line.trim();
+
+        if line.starts_with('[') && line.ends_with(']') {
+            if let (Some(name), Some(url)) = (current_session.take(), current_url.take()) {
+                sessions.insert(
+                    name,
+                    SsoSessionInfo {
+                        sso_start_url: url,
+                        sso_region: current_region.take(),
+                    },
+                );
+            }
+            current_region = None;
+            current_url = None;
+
+            let section = line.trim_matches(|c| c == '[' || c == ']');
+            current_session = section
+                .strip_prefix("sso-session ")
+                .map(|s| s.trim().to_string());
+            continue;
+        }
+
+        if current_session.is_some()
+            && let Some((key, value)) = line.split_once('=')
+        {
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "sso_start_url" => current_url = Some(value.to_string()),
+                "sso_region" => current_region = Some(value.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    if let (Some(name), Some(url)) = (current_session, current_url) {
+        sessions.insert(
+            name,
+            SsoSessionInfo {
+                sso_start_url: url,
+                sso_region: current_region,
+            },
+        );
+    }
+
+    sessions
+}
+
+/// プロファイル情報をprofilesに追加する
+fn flush_profile(
+    profiles: &mut Vec<SsoProfile>,
+    sso_sessions: &std::collections::HashMap<String, SsoSessionInfo>,
+    name: Option<String>,
+    region: Option<String>,
+    sso_url: Option<String>,
+    sso_session: Option<String>,
+) {
+    let Some(name) = name else { return };
+
+    // sso_start_url が直接ある場合はそのまま使用
+    if let Some(url) = sso_url {
+        profiles.push(SsoProfile {
+            name,
+            region,
+            sso_start_url: url,
+        });
+        return;
+    }
+
+    // sso_session 経由で sso_start_url を解決
+    if let Some(session_name) = sso_session
+        && let Some(session) = sso_sessions.get(&session_name)
+    {
+        profiles.push(SsoProfile {
+            name,
+            region: region.or_else(|| session.sso_region.clone()),
+            sso_start_url: session.sso_start_url.clone(),
+        });
+    }
 }
 
 /// プロファイル名からリージョンを取得する
@@ -184,5 +285,89 @@ sso_start_url = https://my-sso.awsapps.com/start
             },
         ];
         assert_eq!(profile_names(&profiles), vec!["dev", "staging"]);
+    }
+
+    #[test]
+    fn parse_sso_profiles_returns_profiles_when_sso_session_format() {
+        let content = r#"
+[sso-session my-sso]
+sso_region = ap-northeast-1
+sso_start_url = https://my-sso.awsapps.com/start
+sso_registration_scopes = sso:account:access
+
+[profile dev]
+sso_session = my-sso
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+
+[profile staging]
+sso_session = my-sso
+sso_account_id = 987654321098
+sso_role_name = StagingAccess
+region = us-west-2
+"#;
+        let profiles = parse_sso_profiles(content);
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].name, "dev");
+        assert_eq!(
+            profiles[0].sso_start_url,
+            "https://my-sso.awsapps.com/start"
+        );
+        // region未指定の場合、sso_sessionのsso_regionにフォールバック
+        assert_eq!(profiles[0].region.as_deref(), Some("ap-northeast-1"));
+        assert_eq!(profiles[1].name, "staging");
+        // profile側にregionがあればそちらを優先
+        assert_eq!(profiles[1].region.as_deref(), Some("us-west-2"));
+    }
+
+    #[test]
+    fn parse_sso_profiles_returns_default_when_default_has_sso_session() {
+        let content = r#"
+[default]
+region = ap-northeast-1
+sso_session = my-sso
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+
+[sso-session my-sso]
+sso_region = ap-northeast-1
+sso_start_url = https://my-sso.awsapps.com/start
+"#;
+        let profiles = parse_sso_profiles(content);
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "default");
+        assert_eq!(
+            profiles[0].sso_start_url,
+            "https://my-sso.awsapps.com/start"
+        );
+    }
+
+    #[test]
+    fn parse_sso_profiles_returns_mixed_when_both_formats() {
+        let content = r#"
+[sso-session my-sso]
+sso_start_url = https://my-sso.awsapps.com/start
+sso_region = us-east-1
+
+[profile session-based]
+sso_session = my-sso
+sso_account_id = 111111111111
+
+[profile direct-url]
+sso_start_url = https://other.awsapps.com/start
+region = eu-west-1
+
+[profile no-sso]
+region = ap-southeast-1
+"#;
+        let profiles = parse_sso_profiles(content);
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].name, "session-based");
+        assert_eq!(
+            profiles[0].sso_start_url,
+            "https://my-sso.awsapps.com/start"
+        );
+        assert_eq!(profiles[1].name, "direct-url");
+        assert_eq!(profiles[1].sso_start_url, "https://other.awsapps.com/start");
     }
 }
