@@ -350,6 +350,18 @@ impl App {
     }
 
     fn handle_back(&mut self) {
+        // Help/Message mode はモード変更のみ（ビュー遷移しない）
+        match self.mode {
+            Mode::Help => {
+                self.mode = Mode::Normal;
+                return;
+            }
+            Mode::Message => {
+                self.dismiss_message();
+                return;
+            }
+            _ => {}
+        }
         match self.view {
             View::Ec2Detail => self.view = View::Ec2List,
             View::Ec2List => {
@@ -358,12 +370,6 @@ impl App {
                 self.filtered_instances.clear();
             }
             View::ProfileSelect => {}
-        }
-        // Help/Message mode のバック
-        match self.mode {
-            Mode::Help => self.mode = Mode::Normal,
-            Mode::Message => self.dismiss_message(),
-            _ => {}
         }
     }
 
@@ -721,6 +727,7 @@ mod tests {
         app.view = View::Ec2List;
         app.dispatch(Action::Back);
         assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.view, View::Ec2List);
     }
 
     #[test]
