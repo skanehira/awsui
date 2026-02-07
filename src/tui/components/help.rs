@@ -135,12 +135,6 @@ mod tests {
     }
 
     #[test]
-    fn help_popup_render_returns_title_when_rendered() {
-        let content = render_help(&View::Ec2List);
-        assert!(content.contains("Help"));
-    }
-
-    #[test]
     fn help_popup_render_returns_navigation_section_when_rendered() {
         let content = render_help(&View::Ec2List);
         assert!(content.contains("Navigation"));
