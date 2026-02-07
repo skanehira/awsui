@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use crate::aws::model::{Instance, InstanceState, Volume};
-use crate::error::AppError;
+use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
 use mockall::automock;
@@ -51,7 +51,7 @@ impl Ec2Client for AwsEc2Client {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             for reservation in resp.reservations() {
                 for sdk_instance in reservation.instances() {
@@ -74,7 +74,7 @@ impl Ec2Client for AwsEc2Client {
             .set_instance_ids(Some(ids.to_vec()))
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 
@@ -84,7 +84,7 @@ impl Ec2Client for AwsEc2Client {
             .set_instance_ids(Some(ids.to_vec()))
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 
@@ -94,7 +94,7 @@ impl Ec2Client for AwsEc2Client {
             .set_instance_ids(Some(ids.to_vec()))
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 
@@ -104,7 +104,7 @@ impl Ec2Client for AwsEc2Client {
             .set_instance_ids(Some(ids.to_vec()))
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::aws::s3_model::{Bucket, S3Object};
-use crate::error::AppError;
+use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
 use mockall::automock;
@@ -46,7 +46,7 @@ impl S3Client for AwsS3Client {
             .list_buckets()
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
         let buckets = resp.buckets().iter().map(convert_bucket).collect();
 
@@ -78,7 +78,7 @@ impl S3Client for AwsS3Client {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             // 共通プレフィックス（ディレクトリ）
             for cp in resp.common_prefixes() {
@@ -114,7 +114,7 @@ impl S3Client for AwsS3Client {
             .bucket(bucket_name)
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 
@@ -124,7 +124,7 @@ impl S3Client for AwsS3Client {
             .bucket(bucket_name)
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 
@@ -135,7 +135,7 @@ impl S3Client for AwsS3Client {
             .key(key)
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 }

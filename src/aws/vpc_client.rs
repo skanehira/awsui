@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use crate::aws::vpc_model::{Subnet, Vpc};
-use crate::error::AppError;
+use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
 use mockall::automock;
@@ -48,7 +48,7 @@ impl VpcClient for AwsVpcClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             for sdk_vpc in resp.vpcs() {
                 vpcs.push(convert_vpc(sdk_vpc));
@@ -81,7 +81,7 @@ impl VpcClient for AwsVpcClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             for sdk_subnet in resp.subnets() {
                 subnets.push(convert_subnet(sdk_subnet));

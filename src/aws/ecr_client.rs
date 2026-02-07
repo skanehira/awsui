@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::aws::ecr_model::{Image, Repository};
-use crate::error::AppError;
+use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
 use mockall::automock;
@@ -46,7 +46,7 @@ impl EcrClient for AwsEcrClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             for sdk_repo in resp.repositories() {
                 repositories.push(convert_repository(sdk_repo));
@@ -77,7 +77,7 @@ impl EcrClient for AwsEcrClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             for sdk_image in resp.image_details() {
                 images.push(convert_image(sdk_image));

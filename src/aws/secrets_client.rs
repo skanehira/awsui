@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use crate::aws::secrets_model::{Secret, SecretDetail};
-use crate::error::AppError;
+use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
 use mockall::automock;
@@ -58,7 +58,7 @@ impl SecretsClient for AwsSecretsClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             for sdk_secret in resp.secret_list() {
                 secrets.push(convert_secret(sdk_secret));
@@ -80,7 +80,7 @@ impl SecretsClient for AwsSecretsClient {
             .secret_id(secret_id)
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
         Ok(convert_secret_detail(&resp))
     }
@@ -97,7 +97,7 @@ impl SecretsClient for AwsSecretsClient {
         }
         req.send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 
@@ -108,7 +108,7 @@ impl SecretsClient for AwsSecretsClient {
             .secret_string(value)
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 
@@ -119,7 +119,7 @@ impl SecretsClient for AwsSecretsClient {
             .force_delete_without_recovery(true)
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
 }

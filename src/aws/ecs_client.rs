@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::aws::ecs_model::{Cluster, Service};
-use crate::error::AppError;
+use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
 use mockall::automock;
@@ -47,7 +47,7 @@ impl EcsClient for AwsEcsClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             cluster_arns.extend(resp.cluster_arns().iter().map(|s| s.to_string()));
 
@@ -68,7 +68,7 @@ impl EcsClient for AwsEcsClient {
             .set_clusters(Some(cluster_arns))
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
         let clusters = resp.clusters().iter().map(convert_cluster).collect();
 
@@ -89,7 +89,7 @@ impl EcsClient for AwsEcsClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::AwsApi(e.to_string()))?;
+                .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
             service_arns.extend(resp.service_arns().iter().map(|s| s.to_string()));
 
@@ -111,7 +111,7 @@ impl EcsClient for AwsEcsClient {
             .set_services(Some(service_arns))
             .send()
             .await
-            .map_err(|e| AppError::AwsApi(e.to_string()))?;
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
 
         let services = resp.services().iter().map(convert_service).collect();
 
