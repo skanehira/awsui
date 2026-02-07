@@ -4,14 +4,15 @@ use ratatui::widgets::{Block, Borders};
 
 use crate::app::App;
 use crate::tui::components::list_selector::ListSelector;
-use crate::tui::components::status_bar::StatusBar;
+use crate::tui::components::status_bar::render_footer;
 
 /// Profile選択画面を描画する
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
+
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（リスト）
-        Constraint::Length(1), // ステータスバー
+        Constraint::Length(1), // フッター
     ])
     .split(area);
 
@@ -22,13 +23,18 @@ pub fn render(frame: &mut Frame, app: &App) {
     let inner = outer_block.inner(outer_chunks[0]);
     frame.render_widget(outer_block, outer_chunks[0]);
 
-    // リスト選択
-    let selector = ListSelector::new("", &app.profile_names, app.profile_selected);
+    // リスト
+    let selector = ListSelector::new("", &app.filtered_profile_names, app.profile_selected);
     frame.render_widget(selector, inner);
 
-    // ステータスバー
-    let status = StatusBar::new("j/k:select  Enter:confirm  q:quit");
-    frame.render_widget(status, outer_chunks[1]);
+    // フッター
+    render_footer(
+        frame,
+        outer_chunks[1],
+        &app.mode,
+        app.filter_input.value(),
+        "j/k:select  /:filter  Enter:confirm  q:quit",
+    );
 }
 
 #[cfg(test)]

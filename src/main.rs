@@ -133,9 +133,7 @@ async fn main() -> anyhow::Result<()> {
 fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
     match app.view {
         View::ProfileSelect => awsui::tui::views::profile_select::render(frame, app),
-        View::ServiceSelect => {
-            awsui::tui::views::service_select::render(frame, app.service_selected)
-        }
+        View::ServiceSelect => awsui::tui::views::service_select::render(frame, app),
         View::Ec2List => awsui::tui::views::ec2_list::render(frame, app, spinner_tick),
         View::Ec2Detail => awsui::tui::views::ec2_detail::render(frame, app),
         View::EcrList => awsui::tui::views::ecr_list::render(

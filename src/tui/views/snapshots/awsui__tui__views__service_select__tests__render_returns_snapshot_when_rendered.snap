@@ -16,4 +16,4 @@ expression: buffer_to_string(&terminal)
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
- j/k:select  Enter:confirm  Esc:back  q:quit
+ j/k:select  /:filter  Enter:confirm  Esc:back  q:quit

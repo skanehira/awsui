@@ -1,12 +1,10 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders};
 
-use crate::app::{App, Mode};
+use crate::app::App;
 use crate::tui::components::list_selector::ListSelector;
-use crate::tui::components::status_bar::StatusBar;
-use crate::tui::theme;
+use crate::tui::components::status_bar::render_footer;
 
 /// 利用可能なAWSサービス一覧
 pub const SERVICE_NAMES: &[&str] = &["EC2", "ECR", "ECS", "S3", "VPC", "Secrets Manager"];
@@ -32,20 +30,14 @@ pub fn render(frame: &mut Frame, app: &App) {
     let selector = ListSelector::new("", &app.filtered_service_names, app.service_selected);
     frame.render_widget(selector, inner);
 
-    // フッター: Filterモード時は入力表示、それ以外はキーバインド
-    match app.mode {
-        Mode::Filter => {
-            let filter_line = Paragraph::new(Line::from(vec![
-                Span::styled("/", theme::active()),
-                Span::raw(app.filter_input.value()),
-            ]));
-            frame.render_widget(filter_line, outer_chunks[1]);
-        }
-        _ => {
-            let status = StatusBar::new("j/k:select  /:filter  Enter:confirm  Esc:back  q:quit");
-            frame.render_widget(status, outer_chunks[1]);
-        }
-    }
+    // フッター
+    render_footer(
+        frame,
+        outer_chunks[1],
+        &app.mode,
+        app.filter_input.value(),
+        "j/k:select  /:filter  Enter:confirm  Esc:back  q:quit",
+    );
 }
 
 #[cfg(test)]

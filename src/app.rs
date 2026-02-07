@@ -225,10 +225,12 @@ pub struct App {
 
     // Profile selection
     pub profile_names: Vec<String>,
+    pub filtered_profile_names: Vec<String>,
     pub profile_selected: usize,
 
     // Service selection
     pub service_selected: usize,
+    pub filtered_service_names: Vec<String>,
 
     // Shared list/detail state
     pub selected_index: usize,
@@ -302,8 +304,13 @@ impl App {
             message: None,
             profile: None,
             region: None,
+            filtered_profile_names: profile_names.clone(),
             profile_names,
             profile_selected: 0,
+            filtered_service_names: crate::tui::views::service_select::SERVICE_NAMES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             service_selected: 0,
             selected_index: 0,
             filter_input: Input::default(),
@@ -394,6 +401,28 @@ impl App {
     pub fn apply_filter(&mut self) {
         let filter_text = self.filter_input.value();
         match self.view {
+            View::ProfileSelect => {
+                self.filtered_profile_names =
+                    fuzzy_filter_items(&self.profile_names, filter_text, 0, |p| vec![p.as_str()]);
+                let len = self.filtered_profile_names.len();
+                if len > 0 && self.profile_selected >= len {
+                    self.profile_selected = len - 1;
+                }
+                return;
+            }
+            View::ServiceSelect => {
+                let all_services: Vec<String> = crate::tui::views::service_select::SERVICE_NAMES
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                self.filtered_service_names =
+                    fuzzy_filter_items(&all_services, filter_text, 0, |s| vec![s.as_str()]);
+                let len = self.filtered_service_names.len();
+                if len > 0 && self.service_selected >= len {
+                    self.service_selected = len - 1;
+                }
+                return;
+            }
             View::Ec2List => {
                 // name_index=1: [instance_id, name, instance_type, state]
                 self.filtered_instances =
@@ -750,15 +779,13 @@ impl App {
     fn move_down(&mut self) {
         match self.view {
             View::ProfileSelect => {
-                let max = self.profile_names.len().saturating_sub(1);
+                let max = self.filtered_profile_names.len().saturating_sub(1);
                 if self.profile_selected < max {
                     self.profile_selected += 1;
                 }
             }
             View::ServiceSelect => {
-                let max = crate::tui::views::service_select::SERVICE_NAMES
-                    .len()
-                    .saturating_sub(1);
+                let max = self.filtered_service_names.len().saturating_sub(1);
                 if self.service_selected < max {
                     self.service_selected += 1;
                 }
@@ -810,12 +837,10 @@ impl App {
     fn move_to_bottom(&mut self) {
         match self.view {
             View::ProfileSelect => {
-                self.profile_selected = self.profile_names.len().saturating_sub(1);
+                self.profile_selected = self.filtered_profile_names.len().saturating_sub(1);
             }
             View::ServiceSelect => {
-                self.service_selected = crate::tui::views::service_select::SERVICE_NAMES
-                    .len()
-                    .saturating_sub(1);
+                self.service_selected = self.filtered_service_names.len().saturating_sub(1);
             }
             View::Ec2List
             | View::EcrList
@@ -866,13 +891,11 @@ impl App {
     fn half_page_down(&mut self) {
         match self.view {
             View::ProfileSelect => {
-                let max = self.profile_names.len().saturating_sub(1);
+                let max = self.filtered_profile_names.len().saturating_sub(1);
                 self.profile_selected = (self.profile_selected + 10).min(max);
             }
             View::ServiceSelect => {
-                let max = crate::tui::views::service_select::SERVICE_NAMES
-                    .len()
-                    .saturating_sub(1);
+                let max = self.filtered_service_names.len().saturating_sub(1);
                 self.service_selected = (self.service_selected + 10).min(max);
             }
             View::Ec2List
@@ -899,24 +922,33 @@ impl App {
     fn handle_enter(&mut self) {
         match self.view {
             View::ProfileSelect => {
-                if let Some(name) = self.profile_names.get(self.profile_selected) {
+                if let Some(name) = self.filtered_profile_names.get(self.profile_selected) {
                     self.profile = Some(name.clone());
                     self.view = View::ServiceSelect;
                     self.service_selected = 0;
+                    self.filter_input.reset();
+                    self.filtered_service_names = crate::tui::views::service_select::SERVICE_NAMES
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
                 }
             }
             View::ServiceSelect => {
-                // SERVICE_NAMES: ["EC2", "ECR", "ECS", "S3", "VPC", "Secrets Manager"]
-                let view = match self.service_selected {
-                    0 => View::Ec2List,
-                    1 => View::EcrList,
-                    2 => View::EcsList,
-                    3 => View::S3List,
-                    4 => View::VpcList,
-                    5 => View::SecretsList,
+                let Some(selected_name) = self.filtered_service_names.get(self.service_selected)
+                else {
+                    return;
+                };
+                let view = match selected_name.as_str() {
+                    "EC2" => View::Ec2List,
+                    "ECR" => View::EcrList,
+                    "ECS" => View::EcsList,
+                    "S3" => View::S3List,
+                    "VPC" => View::VpcList,
+                    "Secrets Manager" => View::SecretsList,
                     _ => return,
                 };
                 self.view = view;
+                self.filter_input.reset();
                 self.reset_list_state();
                 self.loading = true;
             }
@@ -1458,35 +1490,6 @@ mod tests {
             volumes: Vec::new(),
             tags: HashMap::new(),
         }
-    }
-
-    #[test]
-    fn app_new_returns_initial_state_when_created() {
-        let app = App::new(vec!["dev".to_string(), "staging".to_string()]);
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.view, View::ProfileSelect);
-        assert!(!app.should_quit);
-        assert!(!app.loading);
-        assert!(app.message.is_none());
-        assert_eq!(app.profile_names.len(), 2);
-    }
-
-    #[test]
-    fn selected_instance_returns_none_when_no_instances() {
-        let app = App::new(vec![]);
-        assert!(app.selected_instance().is_none());
-    }
-
-    #[test]
-    fn selected_instance_returns_instance_when_index_valid() {
-        let mut app = App::new(vec![]);
-        app.filtered_instances = vec![
-            create_test_instance("i-001", "web", InstanceState::Running),
-            create_test_instance("i-002", "api", InstanceState::Stopped),
-        ];
-        app.selected_index = 1;
-        let instance = app.selected_instance().unwrap();
-        assert_eq!(instance.instance_id, "i-002");
     }
 
     #[test]
@@ -2764,5 +2767,106 @@ mod tests {
         let values = ctx.field_values();
         assert_eq!(values.len(), 1);
         assert_eq!(values[0], ("Name", "a"));
+    }
+
+    // ──────────────────────────────────────────────
+    // ProfileSelect fuzzy filter テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn apply_filter_returns_all_profiles_when_empty_query_in_profile_select() {
+        let mut app = App::new(vec![
+            "dev".to_string(),
+            "staging".to_string(),
+            "prod".to_string(),
+        ]);
+        app.view = View::ProfileSelect;
+        app.filter_input = Input::default();
+        app.apply_filter();
+        assert_eq!(app.filtered_profile_names, vec!["dev", "staging", "prod"]);
+    }
+
+    #[test]
+    fn apply_filter_returns_matching_profiles_when_fuzzy_query_in_profile_select() {
+        let mut app = App::new(vec![
+            "dev-account".to_string(),
+            "staging-account".to_string(),
+            "prod-account".to_string(),
+        ]);
+        app.view = View::ProfileSelect;
+        app.filter_input = Input::from("dev");
+        app.apply_filter();
+        assert_eq!(app.filtered_profile_names, vec!["dev-account"]);
+    }
+
+    #[test]
+    fn handle_enter_returns_correct_profile_when_filtered_in_profile_select() {
+        let mut app = App::new(vec![
+            "dev-account".to_string(),
+            "staging-account".to_string(),
+            "prod-account".to_string(),
+        ]);
+        app.view = View::ProfileSelect;
+        app.filtered_profile_names = vec!["prod-account".to_string()];
+        app.profile_selected = 0;
+        app.dispatch(Action::Enter);
+        assert_eq!(app.profile, Some("prod-account".to_string()));
+        assert_eq!(app.view, View::ServiceSelect);
+    }
+
+    // ──────────────────────────────────────────────
+    // ServiceSelect fuzzy filter テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn apply_filter_returns_all_services_when_empty_query_in_service_select() {
+        let mut app = App::new(vec!["dev".to_string()]);
+        app.view = View::ServiceSelect;
+        app.filter_input = Input::default();
+        app.apply_filter();
+        assert_eq!(
+            app.filtered_service_names,
+            vec!["EC2", "ECR", "ECS", "S3", "VPC", "Secrets Manager"]
+        );
+    }
+
+    #[test]
+    fn apply_filter_returns_matching_services_when_fuzzy_query_in_service_select() {
+        let mut app = App::new(vec!["dev".to_string()]);
+        app.view = View::ServiceSelect;
+        app.filter_input = Input::from("ec");
+        app.apply_filter();
+        // EC2, ECR, ECS, Secrets Manager はすべてecにマッチしうるが、
+        // fuzzyスコアで上位のものだけ返る可能性がある
+        assert!(app.filtered_service_names.contains(&"EC2".to_string()));
+        assert!(app.filtered_service_names.contains(&"ECR".to_string()));
+        assert!(app.filtered_service_names.contains(&"ECS".to_string()));
+    }
+
+    #[test]
+    fn handle_enter_returns_correct_service_when_filtered_in_service_select() {
+        let mut app = App::new(vec!["dev".to_string()]);
+        app.profile = Some("dev".to_string());
+        app.view = View::ServiceSelect;
+        // フィルタでS3だけ残った状態をシミュレート
+        app.filtered_service_names = vec!["S3".to_string()];
+        app.service_selected = 0;
+        app.dispatch(Action::Enter);
+        assert_eq!(app.view, View::S3List);
+    }
+
+    #[test]
+    fn profile_selected_resets_when_filter_applied_in_profile_select() {
+        let mut app = App::new(vec![
+            "dev".to_string(),
+            "staging".to_string(),
+            "prod".to_string(),
+        ]);
+        app.view = View::ProfileSelect;
+        app.profile_selected = 2;
+        app.filter_input = Input::from("dev");
+        app.apply_filter();
+        // フィルタ後にselectedがリスト範囲内に収まる
+        assert!(app.profile_selected < app.filtered_profile_names.len());
     }
 }

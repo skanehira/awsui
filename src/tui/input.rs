@@ -19,8 +19,14 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
 
     // View別のハンドリング
     match app.view {
-        View::ProfileSelect => handle_profile_select_key(key),
-        View::ServiceSelect => handle_service_select_key(key),
+        View::ProfileSelect => match app.mode {
+            Mode::Filter => handle_filter_key(key),
+            _ => handle_profile_select_key(key),
+        },
+        View::ServiceSelect => match app.mode {
+            Mode::Filter => handle_filter_key(key),
+            _ => handle_service_select_key(key),
+        },
         View::Ec2List => match app.mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_ec2_list_key(key),
@@ -78,6 +84,7 @@ fn handle_profile_select_key(key: KeyEvent) -> Action {
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Enter => Action::Enter,
+        KeyCode::Char('/') => Action::StartFilter,
         KeyCode::Char('?') => Action::ShowHelp,
         _ => Action::Noop,
     }
@@ -92,6 +99,7 @@ fn handle_service_select_key(key: KeyEvent) -> Action {
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Enter => Action::Enter,
+        KeyCode::Char('/') => Action::StartFilter,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
         _ => Action::Noop,
@@ -356,6 +364,7 @@ mod tests {
     #[case(key_char('k'), Action::MoveUp)]
     #[case(key(KeyCode::Up), Action::MoveUp)]
     #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key_char('/'), Action::StartFilter)]
     #[case(key_char('q'), Action::Quit)]
     #[case(key_char('?'), Action::ShowHelp)]
     #[case(key_char('x'), Action::Noop)]
@@ -383,6 +392,7 @@ mod tests {
     #[case(key_char('k'), Action::MoveUp)]
     #[case(key(KeyCode::Up), Action::MoveUp)]
     #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key_char('/'), Action::StartFilter)]
     #[case(key(KeyCode::Esc), Action::Back)]
     #[case(key_char('q'), Action::Quit)]
     #[case(key_char('?'), Action::ShowHelp)]
@@ -830,5 +840,49 @@ mod tests {
             handle_key(&app, key(KeyCode::Enter)),
             Action::DangerConfirmSubmit
         );
+    }
+
+    // ──────────────────────────────────────────────
+    // ProfileSelect Filterモードテスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key(KeyCode::Enter), Action::ConfirmFilter)]
+    #[case(key(KeyCode::Esc), Action::CancelFilter)]
+    fn handle_key_returns_expected_action_when_profile_select_filter(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_mode(View::ProfileSelect, Mode::Filter);
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    #[test]
+    fn handle_key_returns_filter_handle_input_when_char_in_profile_filter() {
+        let app = app_with_mode(View::ProfileSelect, Mode::Filter);
+        let action = handle_key(&app, key_char('d'));
+        assert!(matches!(action, Action::FilterHandleInput(_)));
+    }
+
+    // ──────────────────────────────────────────────
+    // ServiceSelect Filterモードテスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key(KeyCode::Enter), Action::ConfirmFilter)]
+    #[case(key(KeyCode::Esc), Action::CancelFilter)]
+    fn handle_key_returns_expected_action_when_service_select_filter(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_mode(View::ServiceSelect, Mode::Filter);
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    #[test]
+    fn handle_key_returns_filter_handle_input_when_char_in_service_filter() {
+        let app = app_with_mode(View::ServiceSelect, Mode::Filter);
+        let action = handle_key(&app, key_char('s'));
+        assert!(matches!(action, Action::FilterHandleInput(_)));
     }
 }
