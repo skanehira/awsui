@@ -7,6 +7,7 @@ pub struct SsoProfile {
     pub name: String,
     pub region: Option<String>,
     pub sso_start_url: String,
+    pub sso_session: Option<String>,
 }
 
 /// ~/.aws/config からSSOプロファイル一覧を読み込む
@@ -168,6 +169,7 @@ fn flush_profile(
             name,
             region,
             sso_start_url: url,
+            sso_session,
         });
         return;
     }
@@ -180,6 +182,7 @@ fn flush_profile(
             name,
             region: region.or_else(|| session.sso_region.clone()),
             sso_start_url: session.sso_start_url.clone(),
+            sso_session: Some(session_name),
         });
     }
 }
@@ -222,8 +225,10 @@ region = eu-west-1
         assert_eq!(profiles.len(), 2);
         assert_eq!(profiles[0].name, "dev-account");
         assert_eq!(profiles[0].region.as_deref(), Some("ap-northeast-1"));
+        assert!(profiles[0].sso_session.is_none());
         assert_eq!(profiles[1].name, "staging");
         assert_eq!(profiles[1].region.as_deref(), Some("us-west-2"));
+        assert!(profiles[1].sso_session.is_none());
     }
 
     #[test]
@@ -257,6 +262,7 @@ sso_start_url = https://my-sso.awsapps.com/start
             name: "dev".to_string(),
             region: Some("ap-northeast-1".to_string()),
             sso_start_url: "https://example.com".to_string(),
+            sso_session: None,
         }];
         assert_eq!(
             get_region_for_profile(&profiles, "dev"),
@@ -277,11 +283,13 @@ sso_start_url = https://my-sso.awsapps.com/start
                 name: "dev".to_string(),
                 region: None,
                 sso_start_url: "https://example.com".to_string(),
+                sso_session: None,
             },
             SsoProfile {
                 name: "staging".to_string(),
                 region: None,
                 sso_start_url: "https://example.com".to_string(),
+                sso_session: None,
             },
         ];
         assert_eq!(profile_names(&profiles), vec!["dev", "staging"]);
@@ -315,9 +323,11 @@ region = us-west-2
         );
         // region未指定の場合、sso_sessionのsso_regionにフォールバック
         assert_eq!(profiles[0].region.as_deref(), Some("ap-northeast-1"));
+        assert_eq!(profiles[0].sso_session.as_deref(), Some("my-sso"));
         assert_eq!(profiles[1].name, "staging");
         // profile側にregionがあればそちらを優先
         assert_eq!(profiles[1].region.as_deref(), Some("us-west-2"));
+        assert_eq!(profiles[1].sso_session.as_deref(), Some("my-sso"));
     }
 
     #[test]

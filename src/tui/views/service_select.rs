@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn render_returns_snapshot_when_rendered() {
-        let app = App::new(vec![]);
+        let app = App::new("dev".to_string(), None);
         let backend = TestBackend::new(60, 15);
         let mut terminal = Terminal::new(backend).unwrap();
 

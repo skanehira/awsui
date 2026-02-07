@@ -303,7 +303,7 @@ mod tests {
     }
 
     fn app_with_detail() -> App {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2Detail;
         app.profile = Some("dev-account".to_string());
         app.region = Some("ap-northeast-1".to_string());

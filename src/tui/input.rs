@@ -19,10 +19,6 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
 
     // View別のハンドリング
     match app.view {
-        View::ProfileSelect => match app.mode {
-            Mode::Filter => handle_filter_key(key),
-            _ => handle_profile_select_key(key),
-        },
         View::ServiceSelect => match app.mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_service_select_key(key),
@@ -71,21 +67,6 @@ fn handle_message_key(key: KeyEvent) -> Action {
 fn handle_help_key(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc | KeyCode::Char('?') => Action::Back,
-        _ => Action::Noop,
-    }
-}
-
-/// Profile選択画面のキー処理
-fn handle_profile_select_key(key: KeyEvent) -> Action {
-    if is_quit_key(&key) {
-        return Action::Quit;
-    }
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-        KeyCode::Enter => Action::Enter,
-        KeyCode::Char('/') => Action::StartFilter,
-        KeyCode::Char('?') => Action::ShowHelp,
         _ => Action::Noop,
     }
 }
@@ -343,7 +324,7 @@ mod tests {
     }
 
     fn app_with_view(view: View) -> App {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = view;
         app
     }
@@ -352,34 +333,6 @@ mod tests {
         let mut app = app_with_view(view);
         app.mode = mode;
         app
-    }
-
-    // ──────────────────────────────────────────────
-    // Profile選択画面テスト
-    // ──────────────────────────────────────────────
-
-    #[rstest]
-    #[case(key_char('j'), Action::MoveDown)]
-    #[case(key(KeyCode::Down), Action::MoveDown)]
-    #[case(key_char('k'), Action::MoveUp)]
-    #[case(key(KeyCode::Up), Action::MoveUp)]
-    #[case(key(KeyCode::Enter), Action::Enter)]
-    #[case(key_char('/'), Action::StartFilter)]
-    #[case(key_char('q'), Action::Quit)]
-    #[case(key_char('?'), Action::ShowHelp)]
-    #[case(key_char('x'), Action::Noop)]
-    fn handle_key_returns_expected_action_when_profile_select(
-        #[case] input: KeyEvent,
-        #[case] expected: Action,
-    ) {
-        let app = app_with_view(View::ProfileSelect);
-        assert_eq!(handle_key(&app, input), expected);
-    }
-
-    #[test]
-    fn handle_key_returns_quit_when_ctrl_c_in_profile_select() {
-        let app = app_with_view(View::ProfileSelect);
-        assert_eq!(handle_key(&app, key_with_ctrl('c')), Action::Quit);
     }
 
     // ──────────────────────────────────────────────
@@ -840,28 +793,6 @@ mod tests {
             handle_key(&app, key(KeyCode::Enter)),
             Action::DangerConfirmSubmit
         );
-    }
-
-    // ──────────────────────────────────────────────
-    // ProfileSelect Filterモードテスト
-    // ──────────────────────────────────────────────
-
-    #[rstest]
-    #[case(key(KeyCode::Enter), Action::ConfirmFilter)]
-    #[case(key(KeyCode::Esc), Action::CancelFilter)]
-    fn handle_key_returns_expected_action_when_profile_select_filter(
-        #[case] input: KeyEvent,
-        #[case] expected: Action,
-    ) {
-        let app = app_with_mode(View::ProfileSelect, Mode::Filter);
-        assert_eq!(handle_key(&app, input), expected);
-    }
-
-    #[test]
-    fn handle_key_returns_filter_handle_input_when_char_in_profile_filter() {
-        let app = app_with_mode(View::ProfileSelect, Mode::Filter);
-        let action = handle_key(&app, key_char('d'));
-        assert!(matches!(action, Action::FilterHandleInput(_)));
     }
 
     // ──────────────────────────────────────────────

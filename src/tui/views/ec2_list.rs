@@ -162,7 +162,7 @@ mod tests {
     }
 
     fn app_with_instances(instances: Vec<Instance>) -> App {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.profile = Some("dev-account".to_string());
         app.region = Some("ap-northeast-1".to_string());

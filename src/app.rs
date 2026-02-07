@@ -171,7 +171,6 @@ impl Eq for DangerConfirmContext {}
 /// 現在の画面
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum View {
-    ProfileSelect,
     ServiceSelect,
     Ec2List,
     Ec2Detail,
@@ -222,11 +221,6 @@ pub struct App {
     // AWS context
     pub profile: Option<String>,
     pub region: Option<String>,
-
-    // Profile selection
-    pub profile_names: Vec<String>,
-    pub filtered_profile_names: Vec<String>,
-    pub profile_selected: usize,
 
     // Service selection
     pub service_selected: usize,
@@ -287,26 +281,24 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(profile_names: Vec<String>) -> Self {
-        Self::with_delete_permissions(profile_names, DeletePermissions::None)
+    pub fn new(profile: String, region: Option<String>) -> Self {
+        Self::with_delete_permissions(profile, region, DeletePermissions::None)
     }
 
     pub fn with_delete_permissions(
-        profile_names: Vec<String>,
+        profile: String,
+        region: Option<String>,
         delete_permissions: DeletePermissions,
     ) -> Self {
         let (event_tx, event_rx) = mpsc::channel(32);
         Self {
             mode: Mode::Normal,
-            view: View::ProfileSelect,
+            view: View::ServiceSelect,
             should_quit: false,
             loading: false,
             message: None,
-            profile: None,
-            region: None,
-            filtered_profile_names: profile_names.clone(),
-            profile_names,
-            profile_selected: 0,
+            profile: Some(profile),
+            region,
             filtered_service_names: crate::tui::views::service_select::SERVICE_NAMES
                 .iter()
                 .map(|s| s.to_string())
@@ -401,15 +393,6 @@ impl App {
     pub fn apply_filter(&mut self) {
         let filter_text = self.filter_input.value();
         match self.view {
-            View::ProfileSelect => {
-                self.filtered_profile_names =
-                    fuzzy_filter_items(&self.profile_names, filter_text, 0, |p| vec![p.as_str()]);
-                let len = self.filtered_profile_names.len();
-                if len > 0 && self.profile_selected >= len {
-                    self.profile_selected = len - 1;
-                }
-                return;
-            }
             View::ServiceSelect => {
                 let all_services: Vec<String> = crate::tui::views::service_select::SERVICE_NAMES
                     .iter()
@@ -751,9 +734,6 @@ impl App {
 
     fn move_up(&mut self) {
         match self.view {
-            View::ProfileSelect => {
-                self.profile_selected = self.profile_selected.saturating_sub(1);
-            }
             View::ServiceSelect => {
                 self.service_selected = self.service_selected.saturating_sub(1);
             }
@@ -778,12 +758,6 @@ impl App {
 
     fn move_down(&mut self) {
         match self.view {
-            View::ProfileSelect => {
-                let max = self.filtered_profile_names.len().saturating_sub(1);
-                if self.profile_selected < max {
-                    self.profile_selected += 1;
-                }
-            }
             View::ServiceSelect => {
                 let max = self.filtered_service_names.len().saturating_sub(1);
                 if self.service_selected < max {
@@ -817,7 +791,6 @@ impl App {
 
     fn move_to_top(&mut self) {
         match self.view {
-            View::ProfileSelect => self.profile_selected = 0,
             View::ServiceSelect => self.service_selected = 0,
             View::Ec2List
             | View::EcrList
@@ -836,9 +809,6 @@ impl App {
 
     fn move_to_bottom(&mut self) {
         match self.view {
-            View::ProfileSelect => {
-                self.profile_selected = self.filtered_profile_names.len().saturating_sub(1);
-            }
             View::ServiceSelect => {
                 self.service_selected = self.filtered_service_names.len().saturating_sub(1);
             }
@@ -863,9 +833,6 @@ impl App {
 
     fn half_page_up(&mut self) {
         match self.view {
-            View::ProfileSelect => {
-                self.profile_selected = self.profile_selected.saturating_sub(10);
-            }
             View::ServiceSelect => {
                 self.service_selected = self.service_selected.saturating_sub(10);
             }
@@ -890,10 +857,6 @@ impl App {
 
     fn half_page_down(&mut self) {
         match self.view {
-            View::ProfileSelect => {
-                let max = self.filtered_profile_names.len().saturating_sub(1);
-                self.profile_selected = (self.profile_selected + 10).min(max);
-            }
             View::ServiceSelect => {
                 let max = self.filtered_service_names.len().saturating_sub(1);
                 self.service_selected = (self.service_selected + 10).min(max);
@@ -921,18 +884,6 @@ impl App {
 
     fn handle_enter(&mut self) {
         match self.view {
-            View::ProfileSelect => {
-                if let Some(name) = self.filtered_profile_names.get(self.profile_selected) {
-                    self.profile = Some(name.clone());
-                    self.view = View::ServiceSelect;
-                    self.service_selected = 0;
-                    self.filter_input.reset();
-                    self.filtered_service_names = crate::tui::views::service_select::SERVICE_NAMES
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                }
-            }
             View::ServiceSelect => {
                 let Some(selected_name) = self.filtered_service_names.get(self.service_selected)
                 else {
@@ -1023,11 +974,8 @@ impl App {
             _ => {}
         }
         match self.view {
-            View::ProfileSelect => {}
             View::ServiceSelect => {
-                self.view = View::ProfileSelect;
-                self.profile = None;
-                self.region = None;
+                self.should_quit = true;
             }
             View::Ec2List
             | View::EcrList
@@ -1494,7 +1442,7 @@ mod tests {
 
     #[test]
     fn apply_filter_returns_all_instances_when_empty_filter() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.instances = vec![
             create_test_instance("i-001", "web", InstanceState::Running),
@@ -1507,7 +1455,7 @@ mod tests {
 
     #[test]
     fn apply_filter_returns_matching_instances_when_filter_set() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.instances = vec![
             create_test_instance("i-001", "web", InstanceState::Running),
@@ -1521,7 +1469,7 @@ mod tests {
 
     #[test]
     fn apply_filter_adjusts_index_when_filter_reduces_list() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.instances = vec![
             create_test_instance("i-001", "web", InstanceState::Running),
@@ -1535,7 +1483,7 @@ mod tests {
 
     #[test]
     fn show_message_sets_mode_to_message_when_called() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.show_message(MessageLevel::Error, "Error", "Something failed");
         assert_eq!(app.mode, Mode::Message);
         assert!(app.message.is_some());
@@ -1546,7 +1494,7 @@ mod tests {
 
     #[test]
     fn dismiss_message_clears_message_when_called() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.show_message(MessageLevel::Info, "Info", "test");
         app.dismiss_message();
         assert!(app.message.is_none());
@@ -1559,47 +1507,15 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_quit_when_quit_action() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         let result = app.dispatch(Action::Quit);
         assert!(app.should_quit);
         assert!(result.is_none());
     }
 
     #[test]
-    fn dispatch_returns_none_and_decrements_profile_selected_when_move_up_in_profile_select() {
-        let mut app = App::new(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
-        app.profile_selected = 2;
-        app.dispatch(Action::MoveUp);
-        assert_eq!(app.profile_selected, 1);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_clamps_at_zero_when_move_up_at_top() {
-        let mut app = App::new(vec!["a".to_string()]);
-        app.profile_selected = 0;
-        app.dispatch(Action::MoveUp);
-        assert_eq!(app.profile_selected, 0);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_increments_profile_selected_when_move_down_in_profile_select() {
-        let mut app = App::new(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
-        app.profile_selected = 0;
-        app.dispatch(Action::MoveDown);
-        assert_eq!(app.profile_selected, 1);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_clamps_at_max_when_move_down_at_bottom() {
-        let mut app = App::new(vec!["a".to_string(), "b".to_string()]);
-        app.profile_selected = 1;
-        app.dispatch(Action::MoveDown);
-        assert_eq!(app.profile_selected, 1);
-    }
-
-    #[test]
     fn dispatch_returns_none_and_decrements_selected_index_when_move_up_in_ec2_list() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![
             create_test_instance("i-001", "a", InstanceState::Running),
@@ -1612,7 +1528,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_increments_selected_index_when_move_down_in_ec2_list() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![
             create_test_instance("i-001", "a", InstanceState::Running),
@@ -1625,7 +1541,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_index_zero_when_move_to_top() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![
             create_test_instance("i-001", "a", InstanceState::Running),
@@ -1638,7 +1554,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_index_to_last_when_move_to_bottom() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![
             create_test_instance("i-001", "a", InstanceState::Running),
@@ -1651,7 +1567,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_moves_up_10_when_half_page_up() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = (0..20)
             .map(|i| create_test_instance(&format!("i-{i:03}"), "inst", InstanceState::Running))
@@ -1663,7 +1579,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_clamps_at_zero_when_half_page_up_near_top() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![
             create_test_instance("i-001", "a", InstanceState::Running),
@@ -1676,7 +1592,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_moves_down_10_when_half_page_down() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = (0..20)
             .map(|i| create_test_instance(&format!("i-{i:03}"), "inst", InstanceState::Running))
@@ -1688,7 +1604,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_clamps_at_max_when_half_page_down_near_bottom() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![
             create_test_instance("i-001", "a", InstanceState::Running),
@@ -1700,17 +1616,8 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_returns_none_and_sets_profile_when_enter_in_profile_select() {
-        let mut app = App::new(vec!["dev".to_string(), "staging".to_string()]);
-        app.profile_selected = 1;
-        app.dispatch(Action::Enter);
-        assert_eq!(app.profile, Some("staging".to_string()));
-        assert_eq!(app.view, View::ServiceSelect);
-    }
-
-    #[test]
     fn dispatch_returns_none_and_switches_to_ec2_list_when_enter_in_service_select() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::ServiceSelect;
         app.service_selected = 0; // EC2
         app.dispatch(Action::Enter);
@@ -1720,7 +1627,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_switches_to_detail_when_enter_in_ec2_list() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
         app.dispatch(Action::Enter);
@@ -1729,7 +1636,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_stays_on_ec2_list_when_enter_with_empty_instances() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.dispatch(Action::Enter);
         assert_eq!(app.view, View::Ec2List);
@@ -1737,7 +1644,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_goes_back_to_ec2_list_when_back_in_ec2_detail() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2Detail;
         app.dispatch(Action::Back);
         assert_eq!(app.view, View::Ec2List);
@@ -1745,7 +1652,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_goes_to_service_select_when_back_in_ec2_list() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
         app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
@@ -1756,18 +1663,16 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_returns_none_and_goes_to_profile_select_when_back_in_service_select() {
-        let mut app = App::new(vec!["dev".to_string()]);
+    fn dispatch_returns_none_and_sets_should_quit_when_back_in_service_select() {
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::ServiceSelect;
-        app.profile = Some("dev".to_string());
         app.dispatch(Action::Back);
-        assert_eq!(app.view, View::ProfileSelect);
-        assert!(app.profile.is_none());
+        assert!(app.should_quit);
     }
 
     #[test]
     fn dispatch_returns_none_and_sets_normal_mode_when_back_in_help() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::Help;
         app.view = View::Ec2List;
         app.dispatch(Action::Back);
@@ -1777,7 +1682,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_dismisses_message_when_back_in_message() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.show_message(MessageLevel::Info, "Info", "test");
         app.dispatch(Action::Back);
@@ -1787,21 +1692,21 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_loading_when_refresh() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.dispatch(Action::Refresh);
         assert!(app.loading);
     }
 
     #[test]
     fn dispatch_returns_none_and_sets_filter_mode_when_start_filter() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.dispatch(Action::StartFilter);
         assert_eq!(app.mode, Mode::Filter);
     }
 
     #[test]
     fn dispatch_returns_none_and_sets_normal_mode_when_confirm_filter() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::Filter;
         app.dispatch(Action::ConfirmFilter);
         assert_eq!(app.mode, Mode::Normal);
@@ -1809,7 +1714,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_clears_filter_when_cancel_filter() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.mode = Mode::Filter;
         app.filter_input = Input::from("web");
@@ -1823,7 +1728,7 @@ mod tests {
     #[test]
     fn dispatch_returns_none_and_updates_input_when_filter_handle_input() {
         use tui_input::InputRequest;
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
         app.dispatch(Action::FilterHandleInput(InputRequest::InsertChar('w')));
@@ -1834,7 +1739,7 @@ mod tests {
     #[test]
     fn dispatch_returns_none_and_deletes_char_when_filter_handle_input_delete() {
         use tui_input::InputRequest;
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filter_input = Input::from("web");
         app.instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
@@ -1844,7 +1749,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_confirm_stop_when_start_stop_on_running() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
         app.dispatch(Action::StartStop);
@@ -1856,7 +1761,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_confirm_start_when_start_stop_on_stopped() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Stopped)];
         app.dispatch(Action::StartStop);
@@ -1868,7 +1773,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_confirm_reboot_when_reboot() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
         app.dispatch(Action::Reboot);
@@ -1880,7 +1785,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_confirm_action_when_confirm_yes() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::Confirm(ConfirmAction::Stop("i-001".to_string()));
         let result = app.dispatch(Action::ConfirmYes);
         assert_eq!(result, Some(ConfirmAction::Stop("i-001".to_string())));
@@ -1889,7 +1794,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_normal_when_confirm_no() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::Confirm(ConfirmAction::Stop("i-001".to_string()));
         let result = app.dispatch(Action::ConfirmNo);
         assert!(result.is_none());
@@ -1898,7 +1803,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_dismisses_when_dismiss_message() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.show_message(MessageLevel::Info, "Info", "test");
         app.dispatch(Action::DismissMessage);
         assert!(app.message.is_none());
@@ -1907,14 +1812,14 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_sets_help_mode_when_show_help() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.dispatch(Action::ShowHelp);
         assert_eq!(app.mode, Mode::Help);
     }
 
     #[test]
     fn dispatch_returns_none_and_toggles_tab_when_switch_detail_tab() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2Detail;
         assert_eq!(app.detail_tab, DetailTab::Overview);
         app.dispatch(Action::SwitchDetailTab);
@@ -1925,7 +1830,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_when_noop() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         let result = app.dispatch(Action::Noop);
         assert!(result.is_none());
     }
@@ -1936,7 +1841,7 @@ mod tests {
 
     #[test]
     fn handle_event_sets_instances_when_instances_loaded_ok() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.loading = true;
         let instances = vec![
@@ -1951,7 +1856,7 @@ mod tests {
 
     #[test]
     fn handle_event_shows_info_message_when_instances_loaded_ok_empty() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.loading = true;
         app.handle_event(AppEvent::InstancesLoaded(Ok(vec![])));
@@ -1964,7 +1869,7 @@ mod tests {
 
     #[test]
     fn handle_event_shows_error_when_instances_loaded_err() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.loading = true;
         app.handle_event(AppEvent::InstancesLoaded(Err(AppError::AwsApi(
             "access denied".to_string(),
@@ -1978,7 +1883,7 @@ mod tests {
 
     #[test]
     fn handle_event_shows_success_and_sets_loading_when_action_completed_ok() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.handle_event(AppEvent::ActionCompleted(
             Ok("Instance started".to_string()),
         ));
@@ -1991,7 +1896,7 @@ mod tests {
 
     #[test]
     fn handle_event_shows_error_when_action_completed_err() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.handle_event(AppEvent::ActionCompleted(Err(AppError::AwsApi(
             "start failed".to_string(),
         ))));
@@ -2007,7 +1912,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_moves_detail_tag_index_when_move_down_in_ec2_detail() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2Detail;
         let mut instance = create_test_instance("i-001", "web", InstanceState::Running);
         instance.tags.insert("env".to_string(), "prod".to_string());
@@ -2025,7 +1930,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_moves_detail_tag_index_when_move_up_in_ec2_detail() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2Detail;
         let instance = create_test_instance("i-001", "web", InstanceState::Running);
         app.instances = vec![instance.clone()];
@@ -2039,7 +1944,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_resets_detail_tag_index_when_enter_ec2_detail() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         let instance = create_test_instance("i-001", "web", InstanceState::Running);
         app.instances = vec![instance.clone()];
@@ -2052,7 +1957,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_resets_detail_tag_index_when_switch_detail_tab() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2Detail;
         app.detail_tag_index = 3;
         app.dispatch(Action::SwitchDetailTab);
@@ -2065,7 +1970,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_increments_service_selected_when_move_down_in_service_select() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::ServiceSelect;
         app.service_selected = 0;
         app.dispatch(Action::MoveDown);
@@ -2074,7 +1979,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_decrements_service_selected_when_move_up_in_service_select() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::ServiceSelect;
         app.service_selected = 2;
         app.dispatch(Action::MoveUp);
@@ -2083,7 +1988,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_enters_ecr_list_when_enter_in_service_select_ecr() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::ServiceSelect;
         app.service_selected = 1; // ECR
         app.dispatch(Action::Enter);
@@ -2093,7 +1998,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_none_and_enters_s3_list_when_enter_in_service_select_s3() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::ServiceSelect;
         app.service_selected = 3; // S3
         app.dispatch(Action::Enter);
@@ -2107,14 +2012,14 @@ mod tests {
 
     #[test]
     fn can_delete_returns_false_when_default_permissions() {
-        let app = App::new(vec![]);
+        let app = App::new("dev".to_string(), None);
         assert!(!app.can_delete("ec2"));
         assert!(!app.can_delete("s3"));
     }
 
     #[test]
     fn can_delete_returns_true_when_all_permissions() {
-        let app = App::with_delete_permissions(vec![], DeletePermissions::All);
+        let app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
         assert!(app.can_delete("ec2"));
         assert!(app.can_delete("s3"));
         assert!(app.can_delete("secrets"));
@@ -2123,7 +2028,8 @@ mod tests {
     #[test]
     fn can_delete_returns_true_when_service_permitted() {
         let app = App::with_delete_permissions(
-            vec![],
+            "dev".to_string(),
+            None,
             DeletePermissions::Services(vec!["ec2".to_string(), "s3".to_string()]),
         );
         assert!(app.can_delete("ec2"));
@@ -2137,7 +2043,7 @@ mod tests {
 
     #[test]
     fn apply_filter_returns_fuzzy_matches_when_ec2_filter_set() {
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.instances = vec![
             create_test_instance("i-001", "web-server", InstanceState::Running),
@@ -2153,7 +2059,7 @@ mod tests {
     #[test]
     fn apply_filter_returns_sorted_by_score_when_multiple_matches() {
         use crate::aws::s3_model::Bucket;
-        let mut app = App::new(vec![]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::S3List;
         app.s3_buckets = vec![
             Bucket {
@@ -2181,7 +2087,7 @@ mod tests {
     // ──────────────────────────────────────────────
 
     fn app_with_ec2_detail() -> App {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2Detail;
         app.detail_tab = DetailTab::Overview;
         let instance = create_test_instance("i-001", "web", InstanceState::Running);
@@ -2254,7 +2160,7 @@ mod tests {
 
     #[test]
     fn handle_back_returns_vpc_list_when_vpc_detail_without_nav_stack() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::VpcDetail;
         app.dispatch(Action::Back);
         assert_eq!(app.view, View::VpcList);
@@ -2367,7 +2273,7 @@ mod tests {
 
     #[test]
     fn handle_create_returns_form_mode_when_s3_list() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::S3List;
         app.dispatch(Action::Create);
         assert!(matches!(
@@ -2381,7 +2287,7 @@ mod tests {
 
     #[test]
     fn handle_create_returns_form_mode_when_secrets_list() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::SecretsList;
         app.dispatch(Action::Create);
         if let Mode::Form(ctx) = &app.mode {
@@ -2394,7 +2300,7 @@ mod tests {
 
     #[test]
     fn handle_create_returns_no_change_when_ec2_list() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.dispatch(Action::Create);
         assert_eq!(app.mode, Mode::Normal);
@@ -2406,7 +2312,7 @@ mod tests {
 
     #[test]
     fn handle_delete_returns_permission_denied_when_no_permission() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::Ec2List;
         app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
         app.dispatch(Action::Delete);
@@ -2415,7 +2321,7 @@ mod tests {
 
     #[test]
     fn handle_delete_returns_danger_confirm_when_ec2_with_permission() {
-        let mut app = App::with_delete_permissions(vec!["dev".to_string()], DeletePermissions::All);
+        let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
         app.view = View::Ec2List;
         app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
         app.dispatch(Action::Delete);
@@ -2428,7 +2334,7 @@ mod tests {
 
     #[test]
     fn handle_delete_returns_danger_confirm_when_s3_list_with_permission() {
-        let mut app = App::with_delete_permissions(vec!["dev".to_string()], DeletePermissions::All);
+        let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
         app.view = View::S3List;
         app.s3_filtered_buckets = vec![crate::aws::s3_model::Bucket {
             name: "my-bucket".to_string(),
@@ -2447,7 +2353,7 @@ mod tests {
 
     #[test]
     fn handle_delete_returns_danger_confirm_when_secrets_list_with_permission() {
-        let mut app = App::with_delete_permissions(vec!["dev".to_string()], DeletePermissions::All);
+        let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
         app.view = View::SecretsList;
         app.filtered_secrets = vec![crate::aws::secrets_model::Secret {
             name: "my-secret".to_string(),
@@ -2471,7 +2377,8 @@ mod tests {
     #[test]
     fn handle_delete_returns_permission_denied_when_service_not_allowed() {
         let mut app = App::with_delete_permissions(
-            vec!["dev".to_string()],
+            "dev".to_string(),
+            None,
             DeletePermissions::Services(vec!["ec2".to_string()]),
         );
         app.view = View::S3List;
@@ -2489,7 +2396,7 @@ mod tests {
 
     #[test]
     fn handle_edit_returns_form_mode_when_secrets_detail_with_detail() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::SecretsDetail;
         app.secret_detail = Some(crate::aws::secrets_model::SecretDetail {
             name: "my-secret".to_string(),
@@ -2516,7 +2423,7 @@ mod tests {
 
     #[test]
     fn handle_edit_returns_no_change_when_no_detail() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::SecretsDetail;
         app.dispatch(Action::Edit);
         assert_eq!(app.mode, Mode::Normal);
@@ -2528,7 +2435,7 @@ mod tests {
 
     #[test]
     fn handle_form_cancel_returns_normal_mode_when_in_form() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::Form(FormContext {
             kind: FormKind::CreateS3Bucket,
             fields: vec![FormField {
@@ -2544,7 +2451,7 @@ mod tests {
 
     #[test]
     fn handle_form_submit_returns_error_when_required_field_empty() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::Form(FormContext {
             kind: FormKind::CreateS3Bucket,
             fields: vec![FormField {
@@ -2560,7 +2467,7 @@ mod tests {
 
     #[test]
     fn handle_form_submit_returns_pending_form_when_valid() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         let mut input = Input::default();
         input.handle(tui_input::InputRequest::InsertChar('t'));
         input.handle(tui_input::InputRequest::InsertChar('e'));
@@ -2583,7 +2490,7 @@ mod tests {
 
     #[test]
     fn handle_form_next_field_returns_next_when_multiple_fields() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::Form(FormContext {
             kind: FormKind::CreateSecret,
             fields: vec![
@@ -2610,7 +2517,7 @@ mod tests {
 
     #[test]
     fn handle_form_next_field_wraps_around_when_at_last_field() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::Form(FormContext {
             kind: FormKind::CreateSecret,
             fields: vec![
@@ -2641,7 +2548,7 @@ mod tests {
 
     #[test]
     fn handle_danger_confirm_cancel_returns_normal_mode() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::DangerConfirm(DangerConfirmContext {
             action: DangerAction::TerminateEc2("i-001".to_string()),
             input: Input::default(),
@@ -2652,7 +2559,7 @@ mod tests {
 
     #[test]
     fn handle_danger_confirm_submit_returns_no_action_when_text_mismatch() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.mode = Mode::DangerConfirm(DangerConfirmContext {
             action: DangerAction::TerminateEc2("i-001".to_string()),
             input: Input::default(),
@@ -2663,7 +2570,7 @@ mod tests {
 
     #[test]
     fn handle_danger_confirm_submit_returns_pending_action_when_text_matches() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         let mut input = Input::default();
         for c in "i-001".chars() {
             input.handle(tui_input::InputRequest::InsertChar(c));
@@ -2726,7 +2633,7 @@ mod tests {
 
     #[test]
     fn handle_event_returns_success_message_when_crud_completed_ok() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.handle_event(AppEvent::CrudCompleted(Ok("Bucket created".to_string())));
         assert_eq!(app.mode, Mode::Message);
         assert!(app.loading);
@@ -2737,7 +2644,7 @@ mod tests {
 
     #[test]
     fn handle_event_returns_error_message_when_crud_completed_err() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.handle_event(AppEvent::CrudCompleted(Err(AppError::AwsApi(
             "access denied".to_string(),
         ))));
@@ -2770,57 +2677,12 @@ mod tests {
     }
 
     // ──────────────────────────────────────────────
-    // ProfileSelect fuzzy filter テスト
-    // ──────────────────────────────────────────────
-
-    #[test]
-    fn apply_filter_returns_all_profiles_when_empty_query_in_profile_select() {
-        let mut app = App::new(vec![
-            "dev".to_string(),
-            "staging".to_string(),
-            "prod".to_string(),
-        ]);
-        app.view = View::ProfileSelect;
-        app.filter_input = Input::default();
-        app.apply_filter();
-        assert_eq!(app.filtered_profile_names, vec!["dev", "staging", "prod"]);
-    }
-
-    #[test]
-    fn apply_filter_returns_matching_profiles_when_fuzzy_query_in_profile_select() {
-        let mut app = App::new(vec![
-            "dev-account".to_string(),
-            "staging-account".to_string(),
-            "prod-account".to_string(),
-        ]);
-        app.view = View::ProfileSelect;
-        app.filter_input = Input::from("dev");
-        app.apply_filter();
-        assert_eq!(app.filtered_profile_names, vec!["dev-account"]);
-    }
-
-    #[test]
-    fn handle_enter_returns_correct_profile_when_filtered_in_profile_select() {
-        let mut app = App::new(vec![
-            "dev-account".to_string(),
-            "staging-account".to_string(),
-            "prod-account".to_string(),
-        ]);
-        app.view = View::ProfileSelect;
-        app.filtered_profile_names = vec!["prod-account".to_string()];
-        app.profile_selected = 0;
-        app.dispatch(Action::Enter);
-        assert_eq!(app.profile, Some("prod-account".to_string()));
-        assert_eq!(app.view, View::ServiceSelect);
-    }
-
-    // ──────────────────────────────────────────────
     // ServiceSelect fuzzy filter テスト
     // ──────────────────────────────────────────────
 
     #[test]
     fn apply_filter_returns_all_services_when_empty_query_in_service_select() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::ServiceSelect;
         app.filter_input = Input::default();
         app.apply_filter();
@@ -2832,7 +2694,7 @@ mod tests {
 
     #[test]
     fn apply_filter_returns_matching_services_when_fuzzy_query_in_service_select() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.view = View::ServiceSelect;
         app.filter_input = Input::from("ec");
         app.apply_filter();
@@ -2845,7 +2707,7 @@ mod tests {
 
     #[test]
     fn handle_enter_returns_correct_service_when_filtered_in_service_select() {
-        let mut app = App::new(vec!["dev".to_string()]);
+        let mut app = App::new("dev".to_string(), None);
         app.profile = Some("dev".to_string());
         app.view = View::ServiceSelect;
         // フィルタでS3だけ残った状態をシミュレート
@@ -2855,18 +2717,4 @@ mod tests {
         assert_eq!(app.view, View::S3List);
     }
 
-    #[test]
-    fn profile_selected_resets_when_filter_applied_in_profile_select() {
-        let mut app = App::new(vec![
-            "dev".to_string(),
-            "staging".to_string(),
-            "prod".to_string(),
-        ]);
-        app.view = View::ProfileSelect;
-        app.profile_selected = 2;
-        app.filter_input = Input::from("dev");
-        app.apply_filter();
-        // フィルタ後にselectedがリスト範囲内に収まる
-        assert!(app.profile_selected < app.filtered_profile_names.len());
-    }
 }

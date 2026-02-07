@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::sync::Arc;
 
 use awsui::app::{App, ConfirmAction, Mode, View};
@@ -10,11 +11,13 @@ use awsui::aws::vpc_client::{AwsVpcClient, VpcClient};
 use awsui::cli::{Cli, DeletePermissions};
 use awsui::config;
 use awsui::event::AppEvent;
+use awsui::sso::{self, SsoTokenStatus};
 use awsui::tui::components::dialog::{ConfirmDialog, MessageDialog};
 use awsui::tui::components::form_dialog::{DangerConfirmDialog, FormDialog};
 use awsui::tui::components::help::HelpPopup;
 use clap::Parser;
 use ratatui::Frame;
+use skim::prelude::*;
 use tokio::sync::mpsc;
 
 /// 各サービスのクライアントをまとめて保持する
@@ -65,17 +68,43 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // 2. App初期化
-    let mut app = App::with_delete_permissions(profile_names.clone(), delete_permissions);
+    // 2. skim でプロファイル選択
+    let Some(selected_profile) = select_profile(&profile_names) else {
+        return Ok(());
+    };
 
-    // 3. ターミナル初期化
+    // 3. SSO トークンチェック + login
+    if let Some(profile) = profiles.iter().find(|p| p.name == selected_profile) {
+        match sso::check_sso_token(profile) {
+            SsoTokenStatus::Valid => {}
+            SsoTokenStatus::Expired | SsoTokenStatus::NotFound => {
+                let status = std::process::Command::new("aws")
+                    .args(["sso", "login", "--profile", &selected_profile])
+                    .stdin(std::process::Stdio::inherit())
+                    .stdout(std::process::Stdio::inherit())
+                    .stderr(std::process::Stdio::inherit())
+                    .status()?;
+                if !status.success() {
+                    eprintln!("aws sso login failed");
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    // 4. リージョン取得 + App初期化
+    let region = config::get_region_for_profile(&profiles, &selected_profile);
+    let mut app =
+        App::with_delete_permissions(selected_profile, region, delete_permissions);
+
+    // 5. ターミナル初期化
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    // 4. メインループ
+    // 6. メインループ
     let mut event_stream = crossterm::event::EventStream::new();
     let mut render_interval = tokio::time::interval(std::time::Duration::from_millis(16));
     let mut clients = Clients::new();
@@ -103,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
                     let action = awsui::tui::input::handle_key(&app, key);
                     let confirmed = app.dispatch(action);
 
-                    handle_side_effects(&mut app, &profiles, &mut clients, confirmed, &prev_view).await;
+                    handle_side_effects(&mut app, &mut clients, confirmed, &prev_view).await;
                 }
             }
             _ = render_interval.tick() => {
@@ -119,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // 5. ターミナル復元
+    // 7. ターミナル復元
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
@@ -130,9 +159,31 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// skim を使ってプロファイルを選択する
+fn select_profile(profile_names: &[String]) -> Option<String> {
+    let options = SkimOptionsBuilder::default()
+        .height("50%".to_string())
+        .prompt("AWS Profile> ".to_string())
+        .build()
+        .unwrap();
+
+    let input = profile_names.join("\n");
+    let item_reader = SkimItemReader::default();
+    let items = item_reader.of_bufread(Cursor::new(input));
+
+    let output = Skim::run_with(&options, Some(items))?;
+    if output.is_abort {
+        return None;
+    }
+
+    output
+        .selected_items
+        .first()
+        .map(|item| item.output().to_string())
+}
+
 fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
     match app.view {
-        View::ProfileSelect => awsui::tui::views::profile_select::render(frame, app),
         View::ServiceSelect => awsui::tui::views::service_select::render(frame, app),
         View::Ec2List => awsui::tui::views::ec2_list::render(frame, app, spinner_tick),
         View::Ec2Detail => awsui::tui::views::ec2_detail::render(frame, app),
@@ -295,7 +346,6 @@ fn load_instances(tx: &mpsc::Sender<AppEvent>, client: Arc<dyn Ec2Client>) {
 
 async fn handle_side_effects(
     app: &mut App,
-    profiles: &[config::SsoProfile],
     clients: &mut Clients,
     confirmed: Option<ConfirmAction>,
     prev_view: &View,
@@ -305,19 +355,15 @@ async fn handle_side_effects(
         clients.clear();
     }
 
-    // ProfileSelectに戻った場合もクリア
-    if app.view == View::ProfileSelect && *prev_view != View::ProfileSelect {
-        clients.clear();
-    }
-
     // リストビューに新しく遷移した場合 → クライアント作成 + データ読み込み
     if app.loading && *prev_view == View::ServiceSelect {
         let Some(profile_name) = &app.profile else {
             return;
         };
-        let region = config::get_region_for_profile(profiles, profile_name)
+        let region = app
+            .region
+            .clone()
             .unwrap_or_else(|| "ap-northeast-1".to_string());
-        app.region = Some(region.clone());
 
         match app.view {
             View::Ec2List => match AwsEc2Client::new(profile_name, &region).await {

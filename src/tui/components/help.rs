@@ -65,7 +65,7 @@ impl<'a> HelpPopup<'a> {
             View::EcrDetail | View::EcsDetail | View::VpcDetail => {
                 vec![Line::from("    y          Copy ID")]
             }
-            View::ProfileSelect | View::ServiceSelect => vec![],
+            View::ServiceSelect => vec![],
         }
     }
 }
