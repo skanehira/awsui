@@ -1,13 +1,13 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Row};
+use ratatui::widgets::{Block, Borders, Row};
 use tui_input::Input;
 
 use crate::app::Mode;
 use crate::aws::ecs_model::Cluster;
 use crate::tui::components::loading::Loading;
-use crate::tui::components::status_bar::StatusBar;
+use crate::tui::components::status_bar::render_footer;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
@@ -40,20 +40,14 @@ pub fn render(
         render_table(frame, clusters, selected_index, inner);
     }
 
-    match mode {
-        Mode::Filter => {
-            let filter_line = Paragraph::new(Line::from(vec![
-                Span::styled("/", theme::active()),
-                Span::raw(filter_input.value()),
-            ]));
-            frame.render_widget(filter_line, outer_chunks[1]);
-        }
-        _ => {
-            let keybinds = "j/k:move Enter:detail /:filter ?:help Esc:back";
-            let status = StatusBar::new(keybinds);
-            frame.render_widget(status, outer_chunks[1]);
-        }
-    }
+    // フッター
+    render_footer(
+        frame,
+        outer_chunks[1],
+        mode,
+        filter_input.value(),
+        "j/k:move Enter:detail /:filter ?:help Esc:back",
+    );
 }
 
 /// テーブルを描画

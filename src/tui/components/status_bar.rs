@@ -1,9 +1,34 @@
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Paragraph, Widget};
 
+use crate::app::Mode;
 use crate::tui::theme;
+
+/// フッターを描画する（Filterモード時は入力表示、それ以外はステータスバー）
+pub fn render_footer(
+    frame: &mut Frame,
+    area: Rect,
+    mode: &Mode,
+    filter_value: &str,
+    keybinds: &str,
+) {
+    match mode {
+        Mode::Filter => {
+            let filter_line = Paragraph::new(Line::from(vec![
+                Span::styled("/", theme::active()),
+                Span::raw(filter_value),
+            ]));
+            frame.render_widget(filter_line, area);
+        }
+        _ => {
+            let status = StatusBar::new(keybinds);
+            frame.render_widget(status, area);
+        }
+    }
+}
 
 /// ステータスバーWidget
 /// 1行: キーバインドヘルプ

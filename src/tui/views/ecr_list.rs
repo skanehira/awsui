@@ -1,13 +1,13 @@
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Row};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders, Row};
 use tui_input::Input;
 
 use crate::app::Mode;
 use crate::aws::ecr_model::Repository;
 use crate::tui::components::loading::Loading;
-use crate::tui::components::status_bar::StatusBar;
+use crate::tui::components::status_bar::render_footer;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
@@ -54,21 +54,14 @@ pub fn render(
         render_table(frame, repositories, selected_index, inner);
     }
 
-    // フッター: Filterモード時は入力表示、それ以外はキーバインド
-    match mode {
-        Mode::Filter => {
-            let filter_line = Paragraph::new(Line::from(vec![
-                Span::styled("/", theme::active()),
-                Span::raw(filter_input.value()),
-            ]));
-            frame.render_widget(filter_line, outer_chunks[1]);
-        }
-        _ => {
-            let keybinds = "j/k:move Enter:images /:filter ?:help Esc:back";
-            let status = StatusBar::new(keybinds);
-            frame.render_widget(status, outer_chunks[1]);
-        }
-    }
+    // フッター
+    render_footer(
+        frame,
+        outer_chunks[1],
+        mode,
+        filter_input.value(),
+        "j/k:move Enter:images /:filter ?:help Esc:back",
+    );
 }
 
 /// 右タイトル文字列を構築（profile │ region）
