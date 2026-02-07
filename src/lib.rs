@@ -6,4 +6,5 @@ pub mod config;
 pub mod error;
 pub mod event;
 pub mod fuzzy;
+pub mod sso;
 pub mod tui;
