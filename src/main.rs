@@ -162,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
 /// skim を使ってプロファイルを選択する
 fn select_profile(profile_names: &[String]) -> Option<String> {
     let options = SkimOptionsBuilder::default()
-        .height("50%".to_string())
+        .height("100%".to_string())
         .prompt("AWS Profile> ".to_string())
         .build()
         .unwrap();
