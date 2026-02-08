@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Row};
 use tui_input::Input;
@@ -23,9 +23,8 @@ pub fn render(
     spinner_tick: usize,
     profile: Option<&str>,
     region: Option<&str>,
+    area: Rect,
 ) {
-    let area = frame.area();
-
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -164,7 +163,20 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpcs, 0, &input, &mode, false, 0, None, None))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &vpcs,
+                    0,
+                    &input,
+                    &mode,
+                    false,
+                    0,
+                    None,
+                    None,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -186,7 +198,20 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpcs, 0, &input, &mode, false, 0, None, None))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &vpcs,
+                    0,
+                    &input,
+                    &mode,
+                    false,
+                    0,
+                    None,
+                    None,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -209,7 +234,20 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpcs, 0, &input, &mode, false, 0, None, None))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &vpcs,
+                    0,
+                    &input,
+                    &mode,
+                    false,
+                    0,
+                    None,
+                    None,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -249,6 +287,7 @@ mod tests {
                     0,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 )
             })
             .unwrap();
@@ -267,7 +306,20 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpcs, 0, &input, &mode, true, 0, None, None))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &vpcs,
+                    0,
+                    &input,
+                    &mode,
+                    true,
+                    0,
+                    None,
+                    None,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -289,7 +341,20 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpcs, 0, &input, &mode, false, 0, None, None))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &vpcs,
+                    0,
+                    &input,
+                    &mode,
+                    false,
+                    0,
+                    None,
+                    None,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -305,7 +370,20 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpcs, 0, &input, &mode, false, 0, None, None))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &vpcs,
+                    0,
+                    &input,
+                    &mode,
+                    false,
+                    0,
+                    None,
+                    None,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -348,6 +426,7 @@ mod tests {
                     0,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 )
             })
             .unwrap();

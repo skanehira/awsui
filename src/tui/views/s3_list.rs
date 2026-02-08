@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Row};
 use tui_input::Input;
@@ -23,9 +23,8 @@ pub fn render(
     profile: Option<&str>,
     region: Option<&str>,
     spinner_tick: usize,
+    area: Rect,
 ) {
-    let area = frame.area();
-
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -150,6 +149,7 @@ mod tests {
                     Some("dev"),
                     Some("ap-northeast-1"),
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -177,6 +177,7 @@ mod tests {
                     None,
                     None,
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -208,6 +209,7 @@ mod tests {
                     None,
                     None,
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -238,6 +240,7 @@ mod tests {
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -267,6 +270,7 @@ mod tests {
                     None,
                     None,
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -294,6 +298,7 @@ mod tests {
                     None,
                     None,
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -325,6 +330,7 @@ mod tests {
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();

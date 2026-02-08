@@ -2,4 +2,4 @@
 source: src/tui/components/tab_bar.rs
 expression: buffer_to_string(&terminal)
 ---
- EC2   S3   ECS
+ EC2  │  S3  │  ECS

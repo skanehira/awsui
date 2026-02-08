@@ -19,9 +19,8 @@ pub fn render(
     filter_input: &Input,
     mode: &Mode,
     loading: bool,
+    area: Rect,
 ) {
-    let area = frame.area();
-
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
         Constraint::Length(1), // フッター
@@ -134,7 +133,17 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &clusters, 0, &input, &Mode::Normal, false))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &clusters,
+                    0,
+                    &input,
+                    &Mode::Normal,
+                    false,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -149,7 +158,17 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &clusters, 0, &input, &Mode::Normal, false))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &clusters,
+                    0,
+                    &input,
+                    &Mode::Normal,
+                    false,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -172,7 +191,17 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &clusters, 0, &input, &Mode::Normal, false))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &clusters,
+                    0,
+                    &input,
+                    &Mode::Normal,
+                    false,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -189,7 +218,17 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &clusters, 0, &input, &Mode::Normal, true))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &clusters,
+                    0,
+                    &input,
+                    &Mode::Normal,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -204,7 +243,17 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &clusters, 0, &input, &Mode::Filter, false))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &clusters,
+                    0,
+                    &input,
+                    &Mode::Filter,
+                    false,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -219,7 +268,17 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &clusters, 0, &input, &Mode::Normal, false))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &clusters,
+                    0,
+                    &input,
+                    &Mode::Normal,
+                    false,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -238,7 +297,17 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &clusters, 0, &input, &Mode::Normal, false))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &clusters,
+                    0,
+                    &input,
+                    &Mode::Normal,
+                    false,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));

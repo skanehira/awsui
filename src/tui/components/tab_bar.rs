@@ -29,7 +29,7 @@ impl Widget for TabBar<'_> {
             };
 
             if i > 0 {
-                spans.push(Span::raw(" "));
+                spans.push(Span::styled(" │ ", theme::inactive()));
             }
             spans.push(Span::styled(format!(" {} ", title), style));
         }
@@ -113,6 +113,40 @@ mod tests {
             .draw(|frame| {
                 let widget = TabBar::new(&tabs, 1);
                 frame.render_widget(widget, frame.area());
+            })
+            .unwrap();
+
+        insta::assert_snapshot!(buffer_to_string(&terminal));
+    }
+
+    #[test]
+    fn render_returns_snapshot_with_separator_when_app_has_multiple_tabs() {
+        use crate::app::App;
+        use ratatui::layout::{Constraint, Layout};
+
+        let mut app = App::new("dev".to_string(), Some("us-east-1".to_string()));
+        app.create_tab(ServiceKind::Ec2);
+        app.create_tab(ServiceKind::S3);
+        app.create_tab(ServiceKind::Ecs);
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let chunks = Layout::vertical([
+                    Constraint::Length(1), // タブバー
+                    Constraint::Min(1),    // コンテンツ
+                ])
+                .split(area);
+
+                // タブバーを先に描画
+                let tab_bar = TabBar::new(&app.tabs, app.active_tab_index);
+                frame.render_widget(tab_bar, chunks[0]);
+
+                // コンテンツをタブバー以下のエリアに描画
+                crate::tui::views::ec2_list::render(frame, &app, 0, chunks[1]);
             })
             .unwrap();
 

@@ -228,24 +228,9 @@ fn render_tab_content(
     spinner_tick: usize,
     area: ratatui::layout::Rect,
 ) {
-    // フレーム全体のエリアを一時的にオーバーライドしてコンテンツを描画
-    // 各ビュー関数はframe.area()を使うため、areaが全体の場合はそのまま呼べる
-    // タブバーがある場合は、ビュー関数がframe.area()に描画するので
-    // ここではオーバーレイ用にレンダリングエリアを制限する必要がある
-    //
-    // 注: ec2_list/ec2_detailはframe.area()を内部で使用するため、
-    //     タブバーの1行分がオーバーラップする可能性がある。
-    //     ただし、ratatuiのバッファは最後に書いたものが優先されるため、
-    //     タブバーは先に描画されている。ビュー内のouter_chunksが
-    //     frame.area()全体を使うので、タブバー行にビューが描画されうる。
-    //
-    // このPhaseでは、タブが1つの場合はfull area、複数の場合はタブバー分を
-    // 引いたエリアになる。ビュー関数がarea引数を取らないec2_list/ec2_detailは
-    // 内部でframe.area()を使うが、これはPhase 5で統一する。
-    let _ = area; // 将来のPhaseでビュー関数をarea対応にする際に使用
     match app.current_view() {
-        Some(View::Ec2List) => awsui::tui::views::ec2_list::render(frame, app, spinner_tick),
-        Some(View::Ec2Detail) => awsui::tui::views::ec2_detail::render(frame, app),
+        Some(View::Ec2List) => awsui::tui::views::ec2_list::render(frame, app, spinner_tick, area),
+        Some(View::Ec2Detail) => awsui::tui::views::ec2_detail::render(frame, app, area),
         Some(View::EcrList) => {
             if let awsui::tab::ServiceData::Ecr {
                 filtered_repositories,
@@ -262,6 +247,7 @@ fn render_tab_content(
                     spinner_tick,
                     app.profile.as_deref(),
                     app.region.as_deref(),
+                    area,
                 );
             }
         }
@@ -282,6 +268,7 @@ fn render_tab_content(
                     spinner_tick,
                     app.profile.as_deref(),
                     app.region.as_deref(),
+                    area,
                 );
             }
         }
@@ -297,6 +284,7 @@ fn render_tab_content(
                     &tab.filter_input,
                     &tab.mode,
                     tab.loading,
+                    area,
                 );
             }
         }
@@ -314,6 +302,7 @@ fn render_tab_content(
                     services,
                     tab.detail_tag_index,
                     tab.loading,
+                    area,
                 );
             }
         }
@@ -332,6 +321,7 @@ fn render_tab_content(
                     app.profile.as_deref(),
                     app.region.as_deref(),
                     spinner_tick,
+                    area,
                 );
             }
         }
@@ -352,6 +342,7 @@ fn render_tab_content(
                     tab.detail_tag_index,
                     tab.loading,
                     spinner_tick,
+                    area,
                 );
             }
         }
@@ -367,6 +358,7 @@ fn render_tab_content(
                     spinner_tick,
                     app.profile.as_deref(),
                     app.region.as_deref(),
+                    area,
                 );
             }
         }
@@ -385,6 +377,7 @@ fn render_tab_content(
                     tab.detail_tag_index,
                     tab.loading,
                     spinner_tick,
+                    area,
                 );
             }
         }
@@ -403,6 +396,7 @@ fn render_tab_content(
                     app.profile.as_deref(),
                     app.region.as_deref(),
                     spinner_tick,
+                    area,
                 );
             }
         }
@@ -419,6 +413,7 @@ fn render_tab_content(
                     detail_tab,
                     app.profile.as_deref(),
                     app.region.as_deref(),
+                    area,
                 );
             }
         }

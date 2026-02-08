@@ -16,9 +16,8 @@ pub fn render(
     services: &[Service],
     selected_index: usize,
     loading: bool,
+    area: Rect,
 ) {
-    let area = frame.area();
-
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（クラスタ情報 + サービステーブル）
         Constraint::Length(1), // ステータスバー
@@ -189,7 +188,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -204,7 +203,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -221,7 +220,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -244,7 +243,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -261,7 +260,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, true))
+            .draw(|frame| render(frame, &cluster, &services, 0, true, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -276,7 +275,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -296,7 +295,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
             .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));

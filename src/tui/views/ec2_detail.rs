@@ -11,8 +11,7 @@ use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
 /// EC2インスタンス詳細画面を描画する
-pub fn render(frame: &mut Frame, app: &App) {
-    let area = frame.area();
+pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（タブバー + コンテンツ）
         Constraint::Length(1), // ステータスバー
@@ -333,7 +332,9 @@ mod tests {
         let backend = TestBackend::new(80, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("[Overview]"));
@@ -346,7 +347,9 @@ mod tests {
         let backend = TestBackend::new(80, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("i-0abc1234"));
@@ -361,7 +364,9 @@ mod tests {
         let backend = TestBackend::new(80, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("vpc-abc123"));
@@ -375,7 +380,9 @@ mod tests {
         let backend = TestBackend::new(80, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("vol-abc123"));
@@ -392,7 +399,9 @@ mod tests {
         let backend = TestBackend::new(80, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("Key"));
@@ -409,7 +418,9 @@ mod tests {
         let backend = TestBackend::new(80, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("dev-account"));
@@ -423,7 +434,9 @@ mod tests {
         let backend = TestBackend::new(80, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));
     }
@@ -437,7 +450,9 @@ mod tests {
         let backend = TestBackend::new(80, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));
     }

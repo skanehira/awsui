@@ -20,9 +20,8 @@ pub fn render(
     spinner_tick: usize,
     profile: Option<&str>,
     region: Option<&str>,
+    area: Rect,
 ) {
-    let area = frame.area();
-
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（リポジトリ情報 + イメージテーブル）
         Constraint::Length(1), // ステータスバー
@@ -232,6 +231,7 @@ mod tests {
                     0,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -248,7 +248,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None))
+            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -268,7 +268,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None))
+            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -293,7 +293,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None))
+            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -310,7 +310,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, true, 0, None, None))
+            .draw(|frame| render(frame, &repo, &images, 0, true, 0, None, None, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -325,7 +325,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None))
+            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -351,6 +351,7 @@ mod tests {
                     0,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -424,6 +425,7 @@ mod tests {
                     0,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 );
             })
             .unwrap();

@@ -1,0 +1,24 @@
+---
+source: src/tui/components/tab_bar.rs
+expression: buffer_to_string(&terminal)
+---
+ EC2  │  S3  │  ECS                                         
+┌ EC2 Instances ────────────────────────── dev │ us-east-1 ┐
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                  ⠋ Loading instances...                  │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+ j/k:move Enter:detail S:start/stop R:reboot /:filter ?:help

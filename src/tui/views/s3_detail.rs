@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Row};
 
@@ -10,6 +10,7 @@ use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
 /// S3バケット詳細（オブジェクト一覧）画面を描画する
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
     bucket_name: &str,
@@ -18,9 +19,8 @@ pub fn render(
     selected_index: usize,
     loading: bool,
     spinner_tick: usize,
+    area: Rect,
 ) {
-    let area = frame.area();
-
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -166,7 +166,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0))
+            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -180,7 +180,18 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "logs/2025/", 0, false, 0))
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "logs/2025/",
+                    0,
+                    false,
+                    0,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -195,7 +206,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0))
+            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -215,7 +226,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0))
+            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -231,7 +242,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, true, 0))
+            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, true, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -245,7 +256,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0))
+            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -301,7 +312,18 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-prod-bucket", &objects, "", 0, false, 0))
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-prod-bucket",
+                    &objects,
+                    "",
+                    0,
+                    false,
+                    0,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));
@@ -318,7 +340,18 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-prod-bucket", &objects, "logs/2025/", 0, false, 0))
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-prod-bucket",
+                    &objects,
+                    "logs/2025/",
+                    0,
+                    false,
+                    0,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));

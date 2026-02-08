@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Row};
 
@@ -17,9 +17,8 @@ pub fn render(
     selected_index: usize,
     loading: bool,
     spinner_tick: usize,
+    area: Rect,
 ) {
-    let area = frame.area();
-
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -175,7 +174,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0))
+            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -200,7 +199,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0))
+            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -239,7 +238,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0))
+            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -260,7 +259,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpc, &subnets, 0, true, 0))
+            .draw(|frame| render(frame, &vpc, &subnets, 0, true, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -275,7 +274,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0))
+            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -319,7 +318,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0))
+            .draw(|frame| render(frame, &vpc, &subnets, 0, false, 0, frame.area()))
             .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));

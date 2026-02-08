@@ -23,9 +23,8 @@ pub fn render(
     profile: Option<&str>,
     region: Option<&str>,
     spinner_tick: usize,
+    area: Rect,
 ) {
-    let area = frame.area();
-
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -161,6 +160,7 @@ mod tests {
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -188,6 +188,7 @@ mod tests {
                     None,
                     None,
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -221,6 +222,7 @@ mod tests {
                     None,
                     None,
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -251,6 +253,7 @@ mod tests {
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -269,7 +272,18 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(frame, &[], 0, &input, &Mode::Normal, true, None, None, 0);
+                render(
+                    frame,
+                    &[],
+                    0,
+                    &input,
+                    &Mode::Normal,
+                    true,
+                    None,
+                    None,
+                    0,
+                    frame.area(),
+                );
             })
             .unwrap();
 
@@ -296,6 +310,7 @@ mod tests {
                     None,
                     None,
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -327,6 +342,7 @@ mod tests {
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     0,
+                    frame.area(),
                 );
             })
             .unwrap();

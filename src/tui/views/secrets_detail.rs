@@ -23,8 +23,8 @@ pub fn render(
     detail_tab: &SecretsDetailTab,
     profile: Option<&str>,
     region: Option<&str>,
+    area: Rect,
 ) {
-    let area = frame.area();
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（タブバー + コンテンツ）
         Constraint::Length(1), // ステータスバー
@@ -236,6 +236,7 @@ mod tests {
                     &SecretsDetailTab::Overview,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -253,7 +254,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(frame, &detail, 0, &SecretsDetailTab::Overview, None, None);
+                render(
+                    frame,
+                    &detail,
+                    0,
+                    &SecretsDetailTab::Overview,
+                    None,
+                    None,
+                    frame.area(),
+                );
             })
             .unwrap();
 
@@ -271,7 +280,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(frame, &detail, 0, &SecretsDetailTab::Tags, None, None);
+                render(
+                    frame,
+                    &detail,
+                    0,
+                    &SecretsDetailTab::Tags,
+                    None,
+                    None,
+                    frame.area(),
+                );
             })
             .unwrap();
 
@@ -299,6 +316,7 @@ mod tests {
                     &SecretsDetailTab::Overview,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -324,6 +342,7 @@ mod tests {
                     &SecretsDetailTab::Overview,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -346,6 +365,7 @@ mod tests {
                     &SecretsDetailTab::Tags,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    frame.area(),
                 );
             })
             .unwrap();
@@ -364,7 +384,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(frame, &detail, 0, &SecretsDetailTab::Overview, None, None);
+                render(
+                    frame,
+                    &detail,
+                    0,
+                    &SecretsDetailTab::Overview,
+                    None,
+                    None,
+                    frame.area(),
+                );
             })
             .unwrap();
 

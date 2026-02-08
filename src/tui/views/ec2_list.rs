@@ -11,9 +11,7 @@ use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
 /// EC2インスタンス一覧画面を描画する
-pub fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
-    let area = frame.area();
-
+pub fn render(frame: &mut Frame, app: &App, spinner_tick: usize, area: Rect) {
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -205,7 +203,9 @@ mod tests {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app, 0)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, 0, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("EC2 Instances"));
@@ -218,7 +218,9 @@ mod tests {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app, 0)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, 0, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("Instance ID"));
@@ -236,7 +238,9 @@ mod tests {
         let backend = TestBackend::new(80, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app, 0)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, 0, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("i-001"));
@@ -254,7 +258,9 @@ mod tests {
         let backend = TestBackend::new(80, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app, 0)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, 0, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("dev-account"));
@@ -271,7 +277,9 @@ mod tests {
         let backend = TestBackend::new(60, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app, 0)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, 0, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("Loading instances..."));
@@ -289,7 +297,9 @@ mod tests {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app, 0)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, 0, frame.area()))
+            .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("/web"));
@@ -306,7 +316,9 @@ mod tests {
         let backend = TestBackend::new(80, 15);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &app, 0)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &app, 0, frame.area()))
+            .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));
     }
