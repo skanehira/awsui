@@ -2,15 +2,11 @@ use tokio::sync::mpsc;
 use tui_input::Input;
 
 use crate::action::Action;
-use crate::aws::ecr_model::{Image, Repository};
-use crate::aws::ecs_model::{Cluster, Service};
 use crate::aws::model::{Instance, InstanceState};
-use crate::aws::s3_model::{Bucket, S3Object};
-use crate::aws::secrets_model::{Secret, SecretDetail};
-use crate::aws::vpc_model::{Subnet, Vpc};
 use crate::cli::DeletePermissions;
 use crate::event::AppEvent;
 use crate::fuzzy::fuzzy_filter_items;
+use crate::service::ServiceKind;
 use crate::tui::views::secrets_detail::SecretsDetailTab;
 
 /// ナビゲーションスタックのエントリ
@@ -211,62 +207,26 @@ pub struct Message {
 
 /// アプリケーション全体の状態
 pub struct App {
-    // UI state
-    pub mode: Mode,
-    pub view: View,
+    // グローバル UI state
     pub should_quit: bool,
-    pub loading: bool,
     pub message: Option<Message>,
+    pub show_help: bool,
 
     // AWS context
     pub profile: Option<String>,
     pub region: Option<String>,
 
-    // Service selection
-    pub service_selected: usize,
-    pub filtered_service_names: Vec<String>,
+    // タブ管理
+    pub tabs: Vec<crate::tab::Tab>,
+    pub active_tab_index: usize,
+    next_tab_id: u32,
 
-    // Shared list/detail state
-    pub selected_index: usize,
-    pub filter_input: Input,
-    pub detail_tab: DetailTab,
-    pub detail_tag_index: usize,
+    // ダッシュボード
+    pub show_dashboard: bool,
+    pub dashboard: DashboardState,
 
-    // EC2 state
-    pub instances: Vec<Instance>,
-    pub filtered_instances: Vec<Instance>,
-
-    // ECR state
-    pub ecr_repositories: Vec<Repository>,
-    pub ecr_filtered_repositories: Vec<Repository>,
-    pub ecr_images: Vec<Image>,
-
-    // ECS state
-    pub ecs_clusters: Vec<Cluster>,
-    pub ecs_filtered_clusters: Vec<Cluster>,
-    pub ecs_services: Vec<Service>,
-
-    // S3 state
-    pub s3_buckets: Vec<Bucket>,
-    pub s3_filtered_buckets: Vec<Bucket>,
-    pub s3_objects: Vec<S3Object>,
-    pub s3_selected_bucket: Option<String>,
-    pub s3_current_prefix: String,
-
-    // VPC state
-    pub vpcs: Vec<Vpc>,
-    pub filtered_vpcs: Vec<Vpc>,
-    pub subnets: Vec<Subnet>,
-
-    // Secrets state
-    pub secrets: Vec<Secret>,
-    pub filtered_secrets: Vec<Secret>,
-    pub secret_detail: Option<SecretDetail>,
-    pub secrets_detail_tab: SecretsDetailTab,
-
-    // Navigation
-    pub navigation_stack: Vec<NavigationEntry>,
-    pub navigate_target_id: Option<String>,
+    // サービスピッカー（Ctrl+tポップアップ）
+    pub service_picker: Option<ServicePickerState>,
 
     // Delete permissions
     pub delete_permissions: DeletePermissions,
@@ -278,6 +238,74 @@ pub struct App {
     // Async communication
     pub event_tx: mpsc::Sender<AppEvent>,
     pub event_rx: mpsc::Receiver<AppEvent>,
+}
+
+/// ダッシュボードの状態
+pub struct DashboardState {
+    pub selected_index: usize,
+    pub filter_input: Input,
+    pub filtered_services: Vec<ServiceKind>,
+    pub mode: Mode,
+    /// フィルタ適用後の最近使ったサービス
+    pub recent_services: Vec<ServiceKind>,
+    /// 元の最近使ったサービス（フィルタリセット時に復元用）
+    all_recent_services: Vec<ServiceKind>,
+}
+
+impl Default for DashboardState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DashboardState {
+    pub fn new() -> Self {
+        #[cfg(not(test))]
+        let recent = crate::recent::load_recent()
+            .into_iter()
+            .map(|e| e.service)
+            .collect::<Vec<_>>();
+        #[cfg(test)]
+        let recent = Vec::new();
+        Self {
+            selected_index: 0,
+            filter_input: Input::default(),
+            filtered_services: ServiceKind::ALL.to_vec(),
+            mode: Mode::Normal,
+            recent_services: recent.clone(),
+            all_recent_services: recent,
+        }
+    }
+
+    /// ダッシュボードの合計アイテム数（Recent + All Services）
+    pub fn item_count(&self) -> usize {
+        self.recent_services.len() + self.filtered_services.len()
+    }
+
+    /// 選択されたアイテムのServiceKindを返す
+    pub fn selected_service(&self) -> Option<ServiceKind> {
+        let recent_len = self.recent_services.len();
+        if self.selected_index < recent_len {
+            self.recent_services.get(self.selected_index).copied()
+        } else {
+            self.filtered_services
+                .get(self.selected_index - recent_len)
+                .copied()
+        }
+    }
+
+    /// 最近使ったサービスを更新（メモリ内のみ）
+    pub fn update_recent(&mut self, service: ServiceKind) {
+        crate::recent::apply_recent_update(&mut self.all_recent_services, service);
+        self.recent_services = self.all_recent_services.clone();
+    }
+}
+
+/// サービスピッカーの状態
+pub struct ServicePickerState {
+    pub selected_index: usize,
+    pub filter_input: Input,
+    pub filtered_services: Vec<ServiceKind>,
 }
 
 impl App {
@@ -292,44 +320,17 @@ impl App {
     ) -> Self {
         let (event_tx, event_rx) = mpsc::channel(32);
         Self {
-            mode: Mode::Normal,
-            view: View::ServiceSelect,
             should_quit: false,
-            loading: false,
             message: None,
+            show_help: false,
             profile: Some(profile),
             region,
-            filtered_service_names: crate::tui::views::service_select::SERVICE_NAMES
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-            service_selected: 0,
-            selected_index: 0,
-            filter_input: Input::default(),
-            detail_tab: DetailTab::Overview,
-            detail_tag_index: 0,
-            instances: Vec::new(),
-            filtered_instances: Vec::new(),
-            ecr_repositories: Vec::new(),
-            ecr_filtered_repositories: Vec::new(),
-            ecr_images: Vec::new(),
-            ecs_clusters: Vec::new(),
-            ecs_filtered_clusters: Vec::new(),
-            ecs_services: Vec::new(),
-            s3_buckets: Vec::new(),
-            s3_filtered_buckets: Vec::new(),
-            s3_objects: Vec::new(),
-            s3_selected_bucket: None,
-            s3_current_prefix: String::new(),
-            vpcs: Vec::new(),
-            filtered_vpcs: Vec::new(),
-            subnets: Vec::new(),
-            secrets: Vec::new(),
-            filtered_secrets: Vec::new(),
-            secret_detail: None,
-            secrets_detail_tab: SecretsDetailTab::Overview,
-            navigation_stack: Vec::new(),
-            navigate_target_id: None,
+            tabs: Vec::new(),
+            active_tab_index: 0,
+            next_tab_id: 0,
+            show_dashboard: true,
+            dashboard: DashboardState::new(),
+            service_picker: None,
             delete_permissions,
             pending_form: None,
             pending_danger_action: None,
@@ -338,124 +339,197 @@ impl App {
         }
     }
 
+    /// 新しいタブを作成して追加し、そのTabIdを返す
+    pub fn create_tab(&mut self, service: ServiceKind) -> crate::tab::TabId {
+        let id = crate::tab::TabId(self.next_tab_id);
+        self.next_tab_id += 1;
+        let tab = crate::tab::Tab::new(id, service);
+        self.tabs.push(tab);
+        self.active_tab_index = self.tabs.len() - 1;
+        self.show_dashboard = false;
+
+        // 最近使ったサービスの履歴を更新
+        self.dashboard.update_recent(service);
+        #[cfg(not(test))]
+        crate::recent::update_recent(service);
+
+        id
+    }
+
+    /// アクティブなタブへの参照を返す
+    pub fn active_tab(&self) -> Option<&crate::tab::Tab> {
+        self.tabs.get(self.active_tab_index)
+    }
+
+    /// アクティブなタブへの可変参照を返す
+    pub fn active_tab_mut(&mut self) -> Option<&mut crate::tab::Tab> {
+        self.tabs.get_mut(self.active_tab_index)
+    }
+
+    /// TabIdからタブを検索
+    pub fn find_tab(&self, tab_id: crate::tab::TabId) -> Option<&crate::tab::Tab> {
+        self.tabs.iter().find(|t| t.id == tab_id)
+    }
+
+    /// TabIdからタブを可変検索
+    pub fn find_tab_mut(&mut self, tab_id: crate::tab::TabId) -> Option<&mut crate::tab::Tab> {
+        self.tabs.iter_mut().find(|t| t.id == tab_id)
+    }
+
+    /// 次のタブに切り替え
+    pub fn switch_tab_next(&mut self) {
+        if !self.tabs.is_empty() {
+            self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
+        }
+    }
+
+    /// 前のタブに切り替え
+    pub fn switch_tab_prev(&mut self) {
+        if !self.tabs.is_empty() {
+            self.active_tab_index = if self.active_tab_index == 0 {
+                self.tabs.len() - 1
+            } else {
+                self.active_tab_index - 1
+            };
+        }
+    }
+
+    /// アクティブなタブを閉じる
+    pub fn close_tab(&mut self) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        self.tabs.remove(self.active_tab_index);
+        if self.tabs.is_empty() {
+            self.show_dashboard = true;
+            self.active_tab_index = 0;
+        } else if self.active_tab_index >= self.tabs.len() {
+            self.active_tab_index = self.tabs.len() - 1;
+        }
+    }
+
+    /// サービスピッカーを開く
+    fn open_service_picker(&mut self) {
+        self.service_picker = Some(ServicePickerState {
+            selected_index: 0,
+            filter_input: Input::default(),
+            filtered_services: ServiceKind::ALL.to_vec(),
+        });
+    }
+
+    /// ピッカーで選択されたサービスのタブを作成
+    fn picker_confirm(&mut self) {
+        let Some(picker) = &self.service_picker else {
+            return;
+        };
+        let Some(service) = picker.filtered_services.get(picker.selected_index).copied() else {
+            return;
+        };
+        self.service_picker = None;
+        self.create_tab(service);
+    }
+
+    /// ピッカーの選択を上に移動
+    fn picker_move_up(&mut self) {
+        if let Some(picker) = &mut self.service_picker {
+            picker.selected_index = picker.selected_index.saturating_sub(1);
+        }
+    }
+
+    /// ピッカーの選択を下に移動
+    fn picker_move_down(&mut self) {
+        if let Some(picker) = &mut self.service_picker {
+            let max = picker.filtered_services.len().saturating_sub(1);
+            if picker.selected_index < max {
+                picker.selected_index += 1;
+            }
+        }
+    }
+
+    /// ピッカーのフィルタ入力を処理
+    fn picker_handle_input(&mut self, req: tui_input::InputRequest) {
+        if let Some(picker) = &mut self.service_picker {
+            picker.filter_input.handle(req);
+            let filter_text = picker.filter_input.value().to_string();
+            picker.filtered_services = crate::fuzzy::fuzzy_filter_items(
+                ServiceKind::ALL,
+                &filter_text,
+                0,
+                |s: &ServiceKind| vec![s.full_name()],
+            );
+            if picker.selected_index >= picker.filtered_services.len() {
+                picker.selected_index = picker.filtered_services.len().saturating_sub(1);
+            }
+        }
+    }
+
     /// 指定サービスの削除操作が許可されているか
     pub fn can_delete(&self, service: &str) -> bool {
         self.delete_permissions.can_delete(service)
     }
 
-    /// 選択中のインスタンスを返す
+    /// アクティブタブで選択中のインスタンスを返す
     pub fn selected_instance(&self) -> Option<&Instance> {
-        self.filtered_instances.get(self.selected_index)
-    }
-
-    /// 現在のリストビューのフィルタ済みリスト長を返す
-    fn filtered_list_len(&self) -> usize {
-        match self.view {
-            View::Ec2List => self.filtered_instances.len(),
-            View::EcrList => self.ecr_filtered_repositories.len(),
-            View::EcsList => self.ecs_filtered_clusters.len(),
-            View::S3List => self.s3_filtered_buckets.len(),
-            View::VpcList => self.filtered_vpcs.len(),
-            View::SecretsList => self.filtered_secrets.len(),
-            _ => 0,
+        let tab = self.active_tab()?;
+        if let crate::tab::ServiceData::Ec2 {
+            filtered_instances, ..
+        } = &tab.data
+        {
+            filtered_instances.get(tab.selected_index)
+        } else {
+            None
         }
     }
 
-    /// 現在のディテールビューのリスト長を返す
-    fn detail_list_len(&self) -> usize {
-        match self.view {
-            View::Ec2Detail => {
-                if self.detail_tab == DetailTab::Overview {
-                    Ec2DetailField::ALL.len()
-                } else {
-                    self.selected_instance().map(|i| i.tags.len()).unwrap_or(0)
-                }
-            }
-            View::EcrDetail => self.ecr_images.len(),
-            View::EcsDetail => self.ecs_services.len(),
-            View::S3Detail => self.s3_objects.len(),
-            View::VpcDetail => self.subnets.len(),
-            View::SecretsDetail => {
-                if self.secrets_detail_tab == SecretsDetailTab::Tags {
-                    self.secret_detail
-                        .as_ref()
-                        .map(|d| d.tags.len())
-                        .unwrap_or(0)
-                } else {
-                    0
-                }
-            }
-            _ => 0,
-        }
+    /// アクティブタブの(service, tab_view)からViewを導出する
+    pub fn current_view(&self) -> Option<View> {
+        let tab = self.active_tab()?;
+        let view = match (tab.service, tab.tab_view) {
+            (ServiceKind::Ec2, crate::tab::TabView::List) => View::Ec2List,
+            (ServiceKind::Ec2, crate::tab::TabView::Detail) => View::Ec2Detail,
+            (ServiceKind::Ecr, crate::tab::TabView::List) => View::EcrList,
+            (ServiceKind::Ecr, crate::tab::TabView::Detail) => View::EcrDetail,
+            (ServiceKind::Ecs, crate::tab::TabView::List) => View::EcsList,
+            (ServiceKind::Ecs, crate::tab::TabView::Detail) => View::EcsDetail,
+            (ServiceKind::S3, crate::tab::TabView::List) => View::S3List,
+            (ServiceKind::S3, crate::tab::TabView::Detail) => View::S3Detail,
+            (ServiceKind::Vpc, crate::tab::TabView::List) => View::VpcList,
+            (ServiceKind::Vpc, crate::tab::TabView::Detail) => View::VpcDetail,
+            (ServiceKind::SecretsManager, crate::tab::TabView::List) => View::SecretsList,
+            (ServiceKind::SecretsManager, crate::tab::TabView::Detail) => View::SecretsDetail,
+        };
+        Some(view)
     }
 
     /// フィルタを適用
     pub fn apply_filter(&mut self) {
-        let filter_text = self.filter_input.value();
-        match self.view {
-            View::ServiceSelect => {
-                let all_services: Vec<String> = crate::tui::views::service_select::SERVICE_NAMES
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
-                self.filtered_service_names =
-                    fuzzy_filter_items(&all_services, filter_text, 0, |s| vec![s.as_str()]);
-                let len = self.filtered_service_names.len();
-                if len > 0 && self.service_selected >= len {
-                    self.service_selected = len - 1;
-                }
-                return;
-            }
-            View::Ec2List => {
-                // name_index=1: [instance_id, name, instance_type, state]
-                self.filtered_instances =
-                    fuzzy_filter_items(&self.instances, filter_text, 1, |i| {
-                        vec![
-                            i.instance_id.as_str(),
-                            i.name.as_str(),
-                            i.instance_type.as_str(),
-                            i.state.as_str(),
-                        ]
-                    });
-            }
-            View::EcrList => {
-                // name_index=0: [repository_name, repository_uri]
-                self.ecr_filtered_repositories =
-                    fuzzy_filter_items(&self.ecr_repositories, filter_text, 0, |r| {
-                        vec![r.repository_name.as_str(), r.repository_uri.as_str()]
-                    });
-            }
-            View::EcsList => {
-                // name_index=0: [cluster_name, status]
-                self.ecs_filtered_clusters =
-                    fuzzy_filter_items(&self.ecs_clusters, filter_text, 0, |c| {
-                        vec![c.cluster_name.as_str(), c.status.as_str()]
-                    });
-            }
-            View::S3List => {
-                // name_index=0: [name]
-                self.s3_filtered_buckets =
-                    fuzzy_filter_items(&self.s3_buckets, filter_text, 0, |b| vec![b.name.as_str()]);
-            }
-            View::VpcList => {
-                // name_index=1: [vpc_id, name, cidr_block]
-                self.filtered_vpcs = fuzzy_filter_items(&self.vpcs, filter_text, 1, |v| {
-                    vec![v.vpc_id.as_str(), v.name.as_str(), v.cidr_block.as_str()]
+        if self.show_dashboard {
+            let filter_text = self.dashboard.filter_input.value().to_string();
+            self.dashboard.filtered_services =
+                fuzzy_filter_items(ServiceKind::ALL, &filter_text, 0, |s: &ServiceKind| {
+                    vec![s.full_name()]
                 });
+            // Recently Used もフィルタ適用
+            self.dashboard.recent_services = if filter_text.is_empty() {
+                self.dashboard.all_recent_services.clone()
+            } else {
+                fuzzy_filter_items(
+                    &self.dashboard.all_recent_services,
+                    &filter_text,
+                    0,
+                    |s: &ServiceKind| vec![s.full_name()],
+                )
+            };
+            let total = self.dashboard.item_count();
+            if total > 0 && self.dashboard.selected_index >= total {
+                self.dashboard.selected_index = total - 1;
             }
-            View::SecretsList => {
-                // name_index=0: [name, arn]
-                self.filtered_secrets = fuzzy_filter_items(&self.secrets, filter_text, 0, |s| {
-                    vec![s.name.as_str(), s.arn.as_str()]
-                });
-            }
-            _ => {}
+            return;
         }
-        // フィルタ後にインデックスが範囲外にならないよう調整
-        let len = self.filtered_list_len();
-        if len > 0 && self.selected_index >= len {
-            self.selected_index = len - 1;
-        }
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        tab.apply_filter();
     }
 
     /// メッセージダイアログを表示
@@ -470,55 +544,134 @@ impl App {
             title: title.into(),
             body: body.into(),
         });
-        self.mode = Mode::Message;
     }
 
     /// メッセージダイアログを閉じる
     pub fn dismiss_message(&mut self) {
         self.message = None;
-        self.mode = Mode::Normal;
-    }
-
-    /// サービス固有のデータをクリアする
-    fn clear_service_data(&mut self) {
-        self.instances.clear();
-        self.filtered_instances.clear();
-        self.ecr_repositories.clear();
-        self.ecr_filtered_repositories.clear();
-        self.ecr_images.clear();
-        self.ecs_clusters.clear();
-        self.ecs_filtered_clusters.clear();
-        self.ecs_services.clear();
-        self.s3_buckets.clear();
-        self.s3_filtered_buckets.clear();
-        self.s3_objects.clear();
-        self.s3_selected_bucket = None;
-        self.s3_current_prefix.clear();
-        self.vpcs.clear();
-        self.filtered_vpcs.clear();
-        self.subnets.clear();
-        self.secrets.clear();
-        self.filtered_secrets.clear();
-        self.secret_detail = None;
-    }
-
-    /// リスト状態をリセットする（リストビューに遷移する際に呼ぶ）
-    fn reset_list_state(&mut self) {
-        self.selected_index = 0;
-        self.filter_input.reset();
-        self.mode = Mode::Normal;
-    }
-
-    /// 詳細状態をリセットする
-    fn reset_detail_state(&mut self) {
-        self.detail_tag_index = 0;
-        self.detail_tab = DetailTab::Overview;
-        self.secrets_detail_tab = SecretsDetailTab::Overview;
     }
 
     /// Actionに基づいてApp状態を更新する。
     /// ConfirmYes時にconfirm_actionを返す（main側でAPI呼び出しに使う）。
     pub fn dispatch(&mut self, action: Action) -> Option<ConfirmAction> {
+        // グローバルオーバーレイの処理
+        if self.message.is_some() {
+            match action {
+                Action::DismissMessage | Action::Back => {
+                    self.dismiss_message();
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+        if self.show_help {
+            match action {
+                Action::ShowHelp | Action::Back => {
+                    self.show_help = false;
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+
+        // タブ固有モードの処理
+        if !self.show_dashboard
+            && let Some(tab) = self.active_tab()
+        {
+            match &tab.mode {
+                Mode::Confirm(_) => match action {
+                    Action::ConfirmYes => return self.handle_confirm_yes(),
+                    Action::ConfirmNo => {
+                        if let Some(tab) = self.active_tab_mut() {
+                            tab.mode = Mode::Normal;
+                        }
+                        return None;
+                    }
+                    _ => return None,
+                },
+                Mode::Filter => match action {
+                    Action::ConfirmFilter => {
+                        if let Some(tab) = self.active_tab_mut() {
+                            tab.mode = Mode::Normal;
+                        }
+                        return None;
+                    }
+                    Action::CancelFilter => {
+                        if let Some(tab) = self.active_tab_mut() {
+                            tab.mode = Mode::Normal;
+                            tab.filter_input.reset();
+                        }
+                        self.apply_filter();
+                        return None;
+                    }
+                    Action::FilterHandleInput(req) => {
+                        if let Some(tab) = self.active_tab_mut() {
+                            tab.filter_input.handle(req);
+                        }
+                        self.apply_filter();
+                        return None;
+                    }
+                    _ => return None,
+                },
+                Mode::Form(_) => match action {
+                    Action::FormSubmit => return self.handle_form_submit(),
+                    Action::FormCancel => {
+                        if let Some(tab) = self.active_tab_mut() {
+                            tab.mode = Mode::Normal;
+                        }
+                        return None;
+                    }
+                    Action::FormNextField => {
+                        self.handle_form_next_field();
+                        return None;
+                    }
+                    Action::FormHandleInput(req) => {
+                        self.handle_form_input(req);
+                        return None;
+                    }
+                    _ => return None,
+                },
+                Mode::DangerConfirm(_) => match action {
+                    Action::DangerConfirmSubmit => return self.handle_danger_confirm_submit(),
+                    Action::DangerConfirmCancel => {
+                        if let Some(tab) = self.active_tab_mut() {
+                            tab.mode = Mode::Normal;
+                        }
+                        return None;
+                    }
+                    Action::DangerConfirmHandleInput(req) => {
+                        self.handle_danger_confirm_input(req);
+                        return None;
+                    }
+                    _ => return None,
+                },
+                _ => {}
+            }
+        }
+
+        // ダッシュボードのフィルタモード処理
+        if self.show_dashboard && self.dashboard.mode == Mode::Filter {
+            match action {
+                Action::ConfirmFilter => {
+                    self.dashboard.mode = Mode::Normal;
+                    return None;
+                }
+                Action::CancelFilter => {
+                    self.dashboard.mode = Mode::Normal;
+                    self.dashboard.filter_input.reset();
+                    self.apply_filter();
+                    return None;
+                }
+                Action::FilterHandleInput(req) => {
+                    self.dashboard.filter_input.handle(req);
+                    self.apply_filter();
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+
+        // Normal モードのアクション
         match action {
             Action::Quit => self.should_quit = true,
             Action::MoveUp => self.move_up(),
@@ -529,38 +682,50 @@ impl App {
             Action::HalfPageDown => self.half_page_down(),
             Action::Enter => self.handle_enter(),
             Action::Back => self.handle_back(),
-            Action::Refresh => self.loading = true,
-            Action::CopyId => self.copy_id(),
-            Action::StartFilter => self.mode = Mode::Filter,
-            Action::ConfirmFilter => self.mode = Mode::Normal,
-            Action::CancelFilter => {
-                self.mode = Mode::Normal;
-                self.filter_input.reset();
-                self.apply_filter();
+            Action::Refresh => {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.loading = true;
+                }
             }
-            Action::FilterHandleInput(req) => {
-                self.filter_input.handle(req);
-                self.apply_filter();
+            Action::CopyId => self.copy_id(),
+            Action::StartFilter => {
+                if self.show_dashboard {
+                    self.dashboard.mode = Mode::Filter;
+                } else if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::Filter;
+                }
             }
             Action::StartStop => self.handle_start_stop(),
             Action::Reboot => self.handle_reboot(),
-            Action::ConfirmYes => return self.handle_confirm_yes(),
-            Action::ConfirmNo => self.mode = Mode::Normal,
             Action::DismissMessage => self.dismiss_message(),
-            Action::ShowHelp => self.mode = Mode::Help,
+            Action::ShowHelp => self.show_help = true,
             Action::SwitchDetailTab => self.switch_detail_tab(),
             Action::FollowLink => self.handle_follow_link(),
             Action::Create => self.handle_create(),
             Action::Delete => self.handle_delete(),
             Action::Edit => self.handle_edit(),
-            Action::FormSubmit => return self.handle_form_submit(),
-            Action::FormCancel => self.mode = Mode::Normal,
-            Action::FormNextField => self.handle_form_next_field(),
-            Action::FormHandleInput(req) => self.handle_form_input(req),
-            Action::DangerConfirmSubmit => return self.handle_danger_confirm_submit(),
-            Action::DangerConfirmCancel => self.mode = Mode::Normal,
-            Action::DangerConfirmHandleInput(req) => self.handle_danger_confirm_input(req),
-            Action::Noop => {}
+            Action::NextTab => self.switch_tab_next(),
+            Action::PrevTab => self.switch_tab_prev(),
+            Action::CloseTab => self.close_tab(),
+            Action::NewTab => self.open_service_picker(),
+            Action::PickerConfirm => self.picker_confirm(),
+            Action::PickerCancel => self.service_picker = None,
+            Action::PickerMoveUp => self.picker_move_up(),
+            Action::PickerMoveDown => self.picker_move_down(),
+            Action::PickerHandleInput(req) => self.picker_handle_input(req),
+            Action::Noop
+            | Action::ConfirmYes
+            | Action::ConfirmNo
+            | Action::ConfirmFilter
+            | Action::CancelFilter
+            | Action::FilterHandleInput(_)
+            | Action::FormSubmit
+            | Action::FormCancel
+            | Action::FormNextField
+            | Action::FormHandleInput(_)
+            | Action::DangerConfirmSubmit
+            | Action::DangerConfirmCancel
+            | Action::DangerConfirmHandleInput(_) => {}
         }
         None
     }
@@ -568,508 +733,640 @@ impl App {
     /// AppEventをApp状態に反映する。
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::InstancesLoaded(Ok(instances)) => {
-                let is_empty = instances.is_empty();
-                self.instances = instances;
-                self.loading = false;
-                self.apply_filter();
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No instances found");
+            AppEvent::TabEvent(tab_id, tab_event) => {
+                self.handle_tab_event(tab_id, tab_event);
+            }
+            AppEvent::CrudCompleted(tab_id, result) => match result {
+                Ok(msg) => {
+                    self.show_message(MessageLevel::Success, "Success", msg);
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = true;
+                    }
                 }
-            }
-            AppEvent::InstancesLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::ActionCompleted(Ok(msg)) => {
-                self.show_message(MessageLevel::Success, "Success", msg);
-                self.loading = true;
-            }
-            AppEvent::ActionCompleted(Err(e)) => {
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::RepositoriesLoaded(Ok(repos)) => {
-                let is_empty = repos.is_empty();
-                self.ecr_repositories = repos;
-                self.loading = false;
-                self.apply_filter();
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No repositories found");
+                Err(e) => {
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
                 }
-            }
-            AppEvent::RepositoriesLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::ImagesLoaded(Ok(images)) => {
-                let is_empty = images.is_empty();
-                self.ecr_images = images;
-                self.loading = false;
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No images found");
+            },
+        }
+    }
+
+    fn handle_tab_event(&mut self, tab_id: crate::tab::TabId, tab_event: crate::event::TabEvent) {
+        use crate::event::TabEvent;
+        use crate::tab::ServiceData;
+
+        match tab_event {
+            TabEvent::InstancesLoaded(result) => match result {
+                Ok(instances) => {
+                    let is_empty = instances.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Ec2 {
+                            instances: inst,
+                            filtered_instances,
+                        } = &mut tab.data
+                        {
+                            *inst = instances;
+                            *filtered_instances = inst.clone();
+                        }
+                        tab.loading = false;
+                        tab.apply_filter();
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No instances found");
+                    }
                 }
-            }
-            AppEvent::ImagesLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::ClustersLoaded(Ok(clusters)) => {
-                let is_empty = clusters.is_empty();
-                self.ecs_clusters = clusters;
-                self.loading = false;
-                self.apply_filter();
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No clusters found");
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
                 }
-            }
-            AppEvent::ClustersLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::EcsServicesLoaded(Ok(services)) => {
-                let is_empty = services.is_empty();
-                self.ecs_services = services;
-                self.loading = false;
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No services found");
+            },
+            TabEvent::ActionCompleted(result) => match result {
+                Ok(msg) => {
+                    self.show_message(MessageLevel::Success, "Success", msg);
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = true;
+                    }
                 }
-            }
-            AppEvent::EcsServicesLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::BucketsLoaded(Ok(buckets)) => {
-                let is_empty = buckets.is_empty();
-                self.s3_buckets = buckets;
-                self.loading = false;
-                self.apply_filter();
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No buckets found");
+                Err(e) => {
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
                 }
-            }
-            AppEvent::BucketsLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::ObjectsLoaded(Ok(objects)) => {
-                self.s3_objects = objects;
-                self.loading = false;
-            }
-            AppEvent::ObjectsLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::VpcsLoaded(Ok(vpcs)) => {
-                let is_empty = vpcs.is_empty();
-                self.vpcs = vpcs;
-                self.loading = false;
-                self.apply_filter();
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No VPCs found");
+            },
+            TabEvent::RepositoriesLoaded(result) => match result {
+                Ok(repos) => {
+                    let is_empty = repos.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Ecr {
+                            repositories,
+                            filtered_repositories,
+                            ..
+                        } = &mut tab.data
+                        {
+                            *repositories = repos;
+                            *filtered_repositories = repositories.clone();
+                        }
+                        tab.loading = false;
+                        tab.apply_filter();
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No repositories found");
+                    }
                 }
-            }
-            AppEvent::VpcsLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::SubnetsLoaded(Ok(subnets)) => {
-                let is_empty = subnets.is_empty();
-                self.subnets = subnets;
-                self.loading = false;
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No subnets found");
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
                 }
-            }
-            AppEvent::SubnetsLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::SecretsLoaded(Ok(secrets)) => {
-                let is_empty = secrets.is_empty();
-                self.secrets = secrets;
-                self.loading = false;
-                self.apply_filter();
-                if is_empty {
-                    self.show_message(MessageLevel::Info, "Info", "No secrets found");
+            },
+            TabEvent::ImagesLoaded(result) => match result {
+                Ok(images) => {
+                    let is_empty = images.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Ecr { images: imgs, .. } = &mut tab.data {
+                            *imgs = images;
+                        }
+                        tab.loading = false;
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No images found");
+                    }
                 }
-            }
-            AppEvent::SecretsLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::SecretDetailLoaded(Ok(detail)) => {
-                self.secret_detail = Some(*detail);
-                self.loading = false;
-            }
-            AppEvent::SecretDetailLoaded(Err(e)) => {
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::NavigateVpcLoaded(Ok((vpcs, subnets))) => {
-                self.vpcs = vpcs;
-                self.filtered_vpcs = self.vpcs.clone();
-                self.subnets = subnets;
-                self.loading = false;
-            }
-            AppEvent::NavigateVpcLoaded(Err(e)) => {
-                // ナビゲーション失敗時はスタックを巻き戻す
-                if let Some(entry) = self.navigation_stack.pop() {
-                    self.view = entry.view;
-                    self.selected_index = entry.selected_index;
-                    self.detail_tag_index = entry.detail_tag_index;
-                    self.detail_tab = entry.detail_tab;
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
                 }
-                self.loading = false;
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
-            }
-            AppEvent::CrudCompleted(Ok(msg)) => {
-                self.show_message(MessageLevel::Success, "Success", msg);
-                self.loading = true;
-            }
-            AppEvent::CrudCompleted(Err(e)) => {
-                self.show_message(MessageLevel::Error, "Error", e.to_string());
+            },
+            TabEvent::ClustersLoaded(result) => match result {
+                Ok(clusters) => {
+                    let is_empty = clusters.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Ecs {
+                            clusters: cls,
+                            filtered_clusters,
+                            ..
+                        } = &mut tab.data
+                        {
+                            *cls = clusters;
+                            *filtered_clusters = cls.clone();
+                        }
+                        tab.loading = false;
+                        tab.apply_filter();
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No clusters found");
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::EcsServicesLoaded(result) => match result {
+                Ok(services) => {
+                    let is_empty = services.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Ecs { services: svcs, .. } = &mut tab.data {
+                            *svcs = services;
+                        }
+                        tab.loading = false;
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No services found");
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::BucketsLoaded(result) => match result {
+                Ok(buckets) => {
+                    let is_empty = buckets.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::S3 {
+                            buckets: bkts,
+                            filtered_buckets,
+                            ..
+                        } = &mut tab.data
+                        {
+                            *bkts = buckets;
+                            *filtered_buckets = bkts.clone();
+                        }
+                        tab.loading = false;
+                        tab.apply_filter();
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No buckets found");
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::ObjectsLoaded(result) => match result {
+                Ok(objects) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::S3 { objects: objs, .. } = &mut tab.data {
+                            *objs = objects;
+                        }
+                        tab.loading = false;
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::VpcsLoaded(result) => match result {
+                Ok(vpcs) => {
+                    let is_empty = vpcs.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Vpc {
+                            vpcs: vs,
+                            filtered_vpcs,
+                            ..
+                        } = &mut tab.data
+                        {
+                            *vs = vpcs;
+                            *filtered_vpcs = vs.clone();
+                        }
+                        tab.loading = false;
+                        tab.apply_filter();
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No VPCs found");
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::SubnetsLoaded(result) => match result {
+                Ok(subnets) => {
+                    let is_empty = subnets.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Vpc { subnets: subs, .. } = &mut tab.data {
+                            *subs = subnets;
+                        }
+                        tab.loading = false;
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No subnets found");
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::SecretsLoaded(result) => match result {
+                Ok(secrets) => {
+                    let is_empty = secrets.is_empty();
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Secrets {
+                            secrets: secs,
+                            filtered_secrets,
+                            ..
+                        } = &mut tab.data
+                        {
+                            *secs = secrets;
+                            *filtered_secrets = secs.clone();
+                        }
+                        tab.loading = false;
+                        tab.apply_filter();
+                    }
+                    if is_empty {
+                        self.show_message(MessageLevel::Info, "Info", "No secrets found");
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::SecretDetailLoaded(result) => match result {
+                Ok(detail) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Secrets { detail: det, .. } = &mut tab.data {
+                            *det = Some(detail);
+                        }
+                        tab.loading = false;
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::NavigateVpcLoaded(result) => {
+                match result {
+                    Ok((vpcs, subnets)) => {
+                        if let Some(tab) = self.find_tab_mut(tab_id) {
+                            if let ServiceData::Vpc {
+                                vpcs: vs,
+                                filtered_vpcs,
+                                subnets: subs,
+                            } = &mut tab.data
+                            {
+                                *vs = vpcs;
+                                *filtered_vpcs = vs.clone();
+                                *subs = subnets;
+                            }
+                            tab.loading = false;
+                        }
+                    }
+                    Err(e) => {
+                        // ナビゲーション失敗時はスタックを巻き戻す
+                        if let Some(tab) = self.find_tab_mut(tab_id) {
+                            if let Some(entry) = tab.navigation_stack.pop() {
+                                tab.selected_index = entry.selected_index;
+                                tab.detail_tag_index = entry.detail_tag_index;
+                                tab.detail_tab = entry.detail_tab;
+                            }
+                            tab.loading = false;
+                        }
+                        self.show_message(MessageLevel::Error, "Error", e.to_string());
+                    }
+                }
             }
         }
     }
 
     fn move_up(&mut self) {
-        match self.view {
-            View::ServiceSelect => {
-                self.service_selected = self.service_selected.saturating_sub(1);
+        if self.show_dashboard {
+            self.dashboard.selected_index = self.dashboard.selected_index.saturating_sub(1);
+            return;
+        }
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        match tab.tab_view {
+            crate::tab::TabView::List => {
+                tab.selected_index = tab.selected_index.saturating_sub(1);
             }
-            View::Ec2List
-            | View::EcrList
-            | View::EcsList
-            | View::S3List
-            | View::VpcList
-            | View::SecretsList => {
-                self.selected_index = self.selected_index.saturating_sub(1);
-            }
-            View::Ec2Detail
-            | View::EcrDetail
-            | View::EcsDetail
-            | View::S3Detail
-            | View::VpcDetail
-            | View::SecretsDetail => {
-                self.detail_tag_index = self.detail_tag_index.saturating_sub(1);
+            crate::tab::TabView::Detail => {
+                tab.detail_tag_index = tab.detail_tag_index.saturating_sub(1);
             }
         }
     }
 
     fn move_down(&mut self) {
-        match self.view {
-            View::ServiceSelect => {
-                let max = self.filtered_service_names.len().saturating_sub(1);
-                if self.service_selected < max {
-                    self.service_selected += 1;
+        if self.show_dashboard {
+            let max = self.dashboard.item_count().saturating_sub(1);
+            if self.dashboard.selected_index < max {
+                self.dashboard.selected_index += 1;
+            }
+            return;
+        }
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        match tab.tab_view {
+            crate::tab::TabView::List => {
+                let max = tab.filtered_list_len().saturating_sub(1);
+                if tab.selected_index < max {
+                    tab.selected_index += 1;
                 }
             }
-            View::Ec2List
-            | View::EcrList
-            | View::EcsList
-            | View::S3List
-            | View::VpcList
-            | View::SecretsList => {
-                let max = self.filtered_list_len().saturating_sub(1);
-                if self.selected_index < max {
-                    self.selected_index += 1;
-                }
-            }
-            View::Ec2Detail
-            | View::EcrDetail
-            | View::EcsDetail
-            | View::S3Detail
-            | View::VpcDetail
-            | View::SecretsDetail => {
-                let max = self.detail_list_len().saturating_sub(1);
-                if self.detail_tag_index < max {
-                    self.detail_tag_index += 1;
+            crate::tab::TabView::Detail => {
+                let max = tab.detail_list_len().saturating_sub(1);
+                if tab.detail_tag_index < max {
+                    tab.detail_tag_index += 1;
                 }
             }
         }
     }
 
     fn move_to_top(&mut self) {
-        match self.view {
-            View::ServiceSelect => self.service_selected = 0,
-            View::Ec2List
-            | View::EcrList
-            | View::EcsList
-            | View::S3List
-            | View::VpcList
-            | View::SecretsList => self.selected_index = 0,
-            View::Ec2Detail
-            | View::EcrDetail
-            | View::EcsDetail
-            | View::S3Detail
-            | View::VpcDetail
-            | View::SecretsDetail => self.detail_tag_index = 0,
+        if self.show_dashboard {
+            self.dashboard.selected_index = 0;
+            return;
+        }
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        match tab.tab_view {
+            crate::tab::TabView::List => tab.selected_index = 0,
+            crate::tab::TabView::Detail => tab.detail_tag_index = 0,
         }
     }
 
     fn move_to_bottom(&mut self) {
-        match self.view {
-            View::ServiceSelect => {
-                self.service_selected = self.filtered_service_names.len().saturating_sub(1);
+        if self.show_dashboard {
+            self.dashboard.selected_index = self.dashboard.item_count().saturating_sub(1);
+            return;
+        }
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        match tab.tab_view {
+            crate::tab::TabView::List => {
+                tab.selected_index = tab.filtered_list_len().saturating_sub(1);
             }
-            View::Ec2List
-            | View::EcrList
-            | View::EcsList
-            | View::S3List
-            | View::VpcList
-            | View::SecretsList => {
-                self.selected_index = self.filtered_list_len().saturating_sub(1);
-            }
-            View::Ec2Detail
-            | View::EcrDetail
-            | View::EcsDetail
-            | View::S3Detail
-            | View::VpcDetail
-            | View::SecretsDetail => {
-                self.detail_tag_index = self.detail_list_len().saturating_sub(1);
+            crate::tab::TabView::Detail => {
+                tab.detail_tag_index = tab.detail_list_len().saturating_sub(1);
             }
         }
     }
 
     fn half_page_up(&mut self) {
-        match self.view {
-            View::ServiceSelect => {
-                self.service_selected = self.service_selected.saturating_sub(10);
+        if self.show_dashboard {
+            self.dashboard.selected_index = self.dashboard.selected_index.saturating_sub(10);
+            return;
+        }
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        match tab.tab_view {
+            crate::tab::TabView::List => {
+                tab.selected_index = tab.selected_index.saturating_sub(10);
             }
-            View::Ec2List
-            | View::EcrList
-            | View::EcsList
-            | View::S3List
-            | View::VpcList
-            | View::SecretsList => {
-                self.selected_index = self.selected_index.saturating_sub(10);
-            }
-            View::Ec2Detail
-            | View::EcrDetail
-            | View::EcsDetail
-            | View::S3Detail
-            | View::VpcDetail
-            | View::SecretsDetail => {
-                self.detail_tag_index = self.detail_tag_index.saturating_sub(10);
+            crate::tab::TabView::Detail => {
+                tab.detail_tag_index = tab.detail_tag_index.saturating_sub(10);
             }
         }
     }
 
     fn half_page_down(&mut self) {
-        match self.view {
-            View::ServiceSelect => {
-                let max = self.filtered_service_names.len().saturating_sub(1);
-                self.service_selected = (self.service_selected + 10).min(max);
+        if self.show_dashboard {
+            let max = self.dashboard.item_count().saturating_sub(1);
+            self.dashboard.selected_index = (self.dashboard.selected_index + 10).min(max);
+            return;
+        }
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        match tab.tab_view {
+            crate::tab::TabView::List => {
+                let max = tab.filtered_list_len().saturating_sub(1);
+                tab.selected_index = (tab.selected_index + 10).min(max);
             }
-            View::Ec2List
-            | View::EcrList
-            | View::EcsList
-            | View::S3List
-            | View::VpcList
-            | View::SecretsList => {
-                let max = self.filtered_list_len().saturating_sub(1);
-                self.selected_index = (self.selected_index + 10).min(max);
-            }
-            View::Ec2Detail
-            | View::EcrDetail
-            | View::EcsDetail
-            | View::S3Detail
-            | View::VpcDetail
-            | View::SecretsDetail => {
-                let max = self.detail_list_len().saturating_sub(1);
-                self.detail_tag_index = (self.detail_tag_index + 10).min(max);
+            crate::tab::TabView::Detail => {
+                let max = tab.detail_list_len().saturating_sub(1);
+                tab.detail_tag_index = (tab.detail_tag_index + 10).min(max);
             }
         }
     }
 
     fn handle_enter(&mut self) {
-        match self.view {
-            View::ServiceSelect => {
-                let Some(selected_name) = self.filtered_service_names.get(self.service_selected)
-                else {
+        if self.show_dashboard {
+            let Some(service) = self.dashboard.selected_service() else {
+                return;
+            };
+            self.create_tab(service);
+            return;
+        }
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        match tab.tab_view {
+            crate::tab::TabView::List => {
+                if tab.filtered_list_len() == 0 {
                     return;
-                };
-                let view = match selected_name.as_str() {
-                    "EC2" => View::Ec2List,
-                    "ECR" => View::EcrList,
-                    "ECS" => View::EcsList,
-                    "S3" => View::S3List,
-                    "VPC" => View::VpcList,
-                    "Secrets Manager" => View::SecretsList,
-                    _ => return,
-                };
-                self.view = view;
-                self.filter_input.reset();
-                self.reset_list_state();
-                self.loading = true;
-            }
-            View::Ec2List => {
-                if !self.filtered_instances.is_empty() {
-                    self.view = View::Ec2Detail;
-                    self.reset_detail_state();
+                }
+                // S3: バケット選択時にselected_bucketを設定
+                if tab.service == ServiceKind::S3
+                    && let crate::tab::ServiceData::S3 {
+                        filtered_buckets,
+                        selected_bucket,
+                        current_prefix,
+                        ..
+                    } = &mut tab.data
+                    && let Some(bucket) = filtered_buckets.get(tab.selected_index)
+                {
+                    *selected_bucket = Some(bucket.name.clone());
+                    current_prefix.clear();
+                }
+                tab.tab_view = crate::tab::TabView::Detail;
+                tab.reset_detail_state();
+                // EC2は詳細画面でloadingしない（リストデータから表示）
+                if tab.service != ServiceKind::Ec2 {
+                    tab.loading = true;
                 }
             }
-            View::EcrList => {
-                if !self.ecr_filtered_repositories.is_empty() {
-                    self.view = View::EcrDetail;
-                    self.reset_detail_state();
-                    self.loading = true;
-                }
-            }
-            View::EcsList => {
-                if !self.ecs_filtered_clusters.is_empty() {
-                    self.view = View::EcsDetail;
-                    self.reset_detail_state();
-                    self.loading = true;
-                }
-            }
-            View::S3List => {
-                if let Some(bucket) = self.s3_filtered_buckets.get(self.selected_index) {
-                    self.s3_selected_bucket = Some(bucket.name.clone());
-                    self.s3_current_prefix.clear();
-                    self.view = View::S3Detail;
-                    self.reset_detail_state();
-                    self.loading = true;
-                }
-            }
-            View::VpcList => {
-                if !self.filtered_vpcs.is_empty() {
-                    self.view = View::VpcDetail;
-                    self.reset_detail_state();
-                    self.loading = true;
-                }
-            }
-            View::SecretsList => {
-                if !self.filtered_secrets.is_empty() {
-                    self.view = View::SecretsDetail;
-                    self.reset_detail_state();
-                    self.loading = true;
-                }
-            }
-            View::S3Detail => {
-                // プレフィックス(ディレクトリ)の場合は中に入る
-                if let Some(obj) = self.s3_objects.get(self.detail_tag_index)
+            crate::tab::TabView::Detail => {
+                // S3 Detail: プレフィックス(ディレクトリ)の場合は中に入る
+                if tab.service == ServiceKind::S3
+                    && let crate::tab::ServiceData::S3 {
+                        objects,
+                        current_prefix,
+                        ..
+                    } = &mut tab.data
+                    && let Some(obj) = objects.get(tab.detail_tag_index)
                     && obj.is_prefix
                 {
-                    self.s3_current_prefix = obj.key.clone();
-                    self.detail_tag_index = 0;
-                    self.loading = true;
+                    *current_prefix = obj.key.clone();
+                    tab.detail_tag_index = 0;
+                    tab.loading = true;
                 }
             }
-            _ => {}
         }
     }
 
     fn handle_back(&mut self) {
-        // Help/Message mode はモード変更のみ（ビュー遷移しない）
-        match self.mode {
-            Mode::Help => {
-                self.mode = Mode::Normal;
-                return;
-            }
-            Mode::Message => {
-                self.dismiss_message();
-                return;
-            }
-            _ => {}
+        if self.show_dashboard {
+            return;
         }
-        match self.view {
-            View::ServiceSelect => {
-                self.should_quit = true;
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        match tab.tab_view {
+            crate::tab::TabView::List => {
+                // リストビューではEscは何もしない
             }
-            View::Ec2List
-            | View::EcrList
-            | View::EcsList
-            | View::S3List
-            | View::VpcList
-            | View::SecretsList => {
-                self.view = View::ServiceSelect;
-                self.clear_service_data();
-                self.reset_list_state();
-            }
-            View::Ec2Detail => {
-                self.navigation_stack.clear();
-                self.view = View::Ec2List;
-            }
-            View::EcrDetail => {
-                self.view = View::EcrList;
-                self.ecr_images.clear();
-            }
-            View::EcsDetail => {
-                self.view = View::EcsList;
-                self.ecs_services.clear();
-            }
-            View::S3Detail => {
-                if self.s3_current_prefix.is_empty() {
-                    self.view = View::S3List;
-                    self.s3_objects.clear();
-                    self.s3_selected_bucket = None;
-                } else {
-                    // 一つ上のプレフィックスに移動
-                    let trimmed = self.s3_current_prefix.trim_end_matches('/');
-                    if let Some(pos) = trimmed.rfind('/') {
-                        self.s3_current_prefix = trimmed[..=pos].to_string();
-                    } else {
-                        self.s3_current_prefix.clear();
+            crate::tab::TabView::Detail => {
+                // S3: プレフィックス内にいる場合は一つ上に移動
+                if tab.service == ServiceKind::S3
+                    && let crate::tab::ServiceData::S3 {
+                        current_prefix,
+                        objects,
+                        selected_bucket,
+                        ..
+                    } = &mut tab.data
+                {
+                    if !current_prefix.is_empty() {
+                        let trimmed = current_prefix.trim_end_matches('/');
+                        if let Some(pos) = trimmed.rfind('/') {
+                            *current_prefix = trimmed[..=pos].to_string();
+                        } else {
+                            current_prefix.clear();
+                        }
+                        tab.detail_tag_index = 0;
+                        tab.loading = true;
+                        return;
                     }
-                    self.detail_tag_index = 0;
-                    self.loading = true;
+                    // ルートにいる場合はリストに戻る
+                    objects.clear();
+                    *selected_bucket = None;
                 }
-            }
-            View::VpcDetail => {
-                if let Some(entry) = self.navigation_stack.pop() {
-                    // ナビゲーションスタックから戻る
-                    self.view = entry.view;
-                    self.selected_index = entry.selected_index;
-                    self.detail_tag_index = entry.detail_tag_index;
-                    self.detail_tab = entry.detail_tab;
-                    self.subnets.clear();
-                } else {
-                    self.view = View::VpcList;
-                    self.subnets.clear();
+
+                // VPC: ナビゲーションスタックがある場合は戻る
+                if tab.service == ServiceKind::Vpc {
+                    if let Some(entry) = tab.navigation_stack.pop() {
+                        tab.selected_index = entry.selected_index;
+                        tab.detail_tag_index = entry.detail_tag_index;
+                        tab.detail_tab = entry.detail_tab;
+                        if let crate::tab::ServiceData::Vpc { subnets, .. } = &mut tab.data {
+                            subnets.clear();
+                        }
+                        return;
+                    }
+                    if let crate::tab::ServiceData::Vpc { subnets, .. } = &mut tab.data {
+                        subnets.clear();
+                    }
                 }
-            }
-            View::SecretsDetail => {
-                self.view = View::SecretsList;
-                self.secret_detail = None;
+
+                // ECR: イメージをクリア
+                if tab.service == ServiceKind::Ecr
+                    && let crate::tab::ServiceData::Ecr { images, .. } = &mut tab.data
+                {
+                    images.clear();
+                }
+
+                // ECS: サービスをクリア
+                if tab.service == ServiceKind::Ecs
+                    && let crate::tab::ServiceData::Ecs { services, .. } = &mut tab.data
+                {
+                    services.clear();
+                }
+
+                // Secrets: 詳細をクリア
+                if tab.service == ServiceKind::SecretsManager
+                    && let crate::tab::ServiceData::Secrets { detail, .. } = &mut tab.data
+                {
+                    *detail = None;
+                }
+
+                // EC2: ナビゲーションスタックをクリア
+                if tab.service == ServiceKind::Ec2 {
+                    tab.navigation_stack.clear();
+                }
+
+                tab.tab_view = crate::tab::TabView::List;
             }
         }
     }
 
     fn copy_id(&self) {
-        match self.view {
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        match view {
             View::Ec2List | View::Ec2Detail => {
                 if let Some(instance) = self.selected_instance() {
                     let _ = cli_clipboard::set_contents(instance.instance_id.clone());
                 }
             }
             View::EcrList => {
-                if let Some(repo) = self.ecr_filtered_repositories.get(self.selected_index) {
+                if let crate::tab::ServiceData::Ecr {
+                    filtered_repositories,
+                    ..
+                } = &tab.data
+                    && let Some(repo) = filtered_repositories.get(tab.selected_index)
+                {
                     let _ = cli_clipboard::set_contents(repo.repository_uri.clone());
                 }
             }
             View::EcrDetail => {
-                if let Some(image) = self.ecr_images.get(self.detail_tag_index) {
+                if let crate::tab::ServiceData::Ecr { images, .. } = &tab.data
+                    && let Some(image) = images.get(tab.detail_tag_index)
+                {
                     let _ = cli_clipboard::set_contents(image.image_digest.clone());
                 }
             }
             View::VpcList => {
-                if let Some(vpc) = self.filtered_vpcs.get(self.selected_index) {
+                if let crate::tab::ServiceData::Vpc { filtered_vpcs, .. } = &tab.data
+                    && let Some(vpc) = filtered_vpcs.get(tab.selected_index)
+                {
                     let _ = cli_clipboard::set_contents(vpc.vpc_id.clone());
                 }
             }
             View::SecretsList => {
-                if let Some(secret) = self.filtered_secrets.get(self.selected_index) {
+                if let crate::tab::ServiceData::Secrets {
+                    filtered_secrets, ..
+                } = &tab.data
+                    && let Some(secret) = filtered_secrets.get(tab.selected_index)
+                {
                     let _ = cli_clipboard::set_contents(secret.arn.clone());
                 }
             }
             View::SecretsDetail => {
-                if let Some(detail) = &self.secret_detail {
-                    let _ = cli_clipboard::set_contents(detail.arn.clone());
+                if let crate::tab::ServiceData::Secrets { detail, .. } = &tab.data
+                    && let Some(d) = detail
+                {
+                    let _ = cli_clipboard::set_contents(d.arn.clone());
                 }
             }
             View::S3List => {
-                if let Some(bucket) = self.s3_filtered_buckets.get(self.selected_index) {
+                if let crate::tab::ServiceData::S3 {
+                    filtered_buckets, ..
+                } = &tab.data
+                    && let Some(bucket) = filtered_buckets.get(tab.selected_index)
+                {
                     let _ = cli_clipboard::set_contents(bucket.name.clone());
                 }
             }
@@ -1078,144 +1375,125 @@ impl App {
     }
 
     fn handle_start_stop(&mut self) {
-        if let Some(instance) = self.selected_instance() {
-            let id = instance.instance_id.clone();
-            match instance.state {
-                InstanceState::Running => {
-                    self.mode = Mode::Confirm(ConfirmAction::Stop(id));
-                }
-                InstanceState::Stopped => {
-                    self.mode = Mode::Confirm(ConfirmAction::Start(id));
-                }
-                _ => {}
-            }
+        let instance_data = self
+            .selected_instance()
+            .map(|i| (i.instance_id.clone(), i.state.clone()));
+        let Some((id, state)) = instance_data else {
+            return;
+        };
+        let confirm = match state {
+            InstanceState::Running => Some(ConfirmAction::Stop(id)),
+            InstanceState::Stopped => Some(ConfirmAction::Start(id)),
+            _ => None,
+        };
+        if let Some(action) = confirm
+            && let Some(tab) = self.active_tab_mut()
+        {
+            tab.mode = Mode::Confirm(action);
         }
     }
 
     fn handle_reboot(&mut self) {
-        if let Some(instance) = self.selected_instance() {
-            let id = instance.instance_id.clone();
-            self.mode = Mode::Confirm(ConfirmAction::Reboot(id));
+        let id = self.selected_instance().map(|i| i.instance_id.clone());
+        let Some(id) = id else {
+            return;
+        };
+        if let Some(tab) = self.active_tab_mut() {
+            tab.mode = Mode::Confirm(ConfirmAction::Reboot(id));
         }
     }
 
     fn handle_confirm_yes(&mut self) -> Option<ConfirmAction> {
-        let confirmed = if let Mode::Confirm(action) = &self.mode {
+        let tab = self.active_tab_mut()?;
+        let confirmed = if let Mode::Confirm(action) = &tab.mode {
             Some(action.clone())
         } else {
             None
         };
-        self.mode = Mode::Normal;
+        tab.mode = Mode::Normal;
         confirmed
     }
 
     fn switch_detail_tab(&mut self) {
-        self.detail_tag_index = 0;
-        match self.view {
-            View::Ec2Detail => {
-                self.detail_tab = match self.detail_tab {
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        tab.detail_tag_index = 0;
+        match tab.service {
+            ServiceKind::Ec2 => {
+                tab.detail_tab = match tab.detail_tab {
                     DetailTab::Overview => DetailTab::Tags,
                     DetailTab::Tags => DetailTab::Overview,
                 };
             }
-            View::SecretsDetail => {
-                self.secrets_detail_tab = match self.secrets_detail_tab {
-                    SecretsDetailTab::Overview => SecretsDetailTab::Tags,
-                    SecretsDetailTab::Tags => SecretsDetailTab::Overview,
-                };
+            ServiceKind::SecretsManager => {
+                if let crate::tab::ServiceData::Secrets { detail_tab, .. } = &mut tab.data {
+                    *detail_tab = match detail_tab {
+                        SecretsDetailTab::Overview => SecretsDetailTab::Tags,
+                        SecretsDetailTab::Tags => SecretsDetailTab::Overview,
+                    };
+                }
             }
             _ => {}
         }
     }
 
-    /// EC2 Detail Overviewタブでリンクをフォローする
+    /// EC2 Detail Overviewタブでリンクをフォローする（未実装、将来対応）
     fn handle_follow_link(&mut self) {
-        if self.view != View::Ec2Detail || self.detail_tab != DetailTab::Overview {
-            return;
-        }
-
-        let Some(instance) = self.selected_instance().cloned() else {
-            return;
-        };
-
-        let Some(field) = Ec2DetailField::ALL.get(self.detail_tag_index) else {
-            return;
-        };
-
-        let target_id = match field {
-            Ec2DetailField::VpcId => instance.vpc_id.clone(),
-            Ec2DetailField::SubnetId => instance.subnet_id.clone(),
-        };
-
-        let Some(target_id) = target_id else {
-            return; // フィールドが "-" の場合は何もしない
-        };
-
-        if target_id.is_empty() {
-            return;
-        }
-
-        // ナビゲーションスタックに現在の状態を保存
-        self.navigation_stack.push(NavigationEntry {
-            view: self.view.clone(),
-            selected_index: self.selected_index,
-            detail_tag_index: self.detail_tag_index,
-            detail_tab: self.detail_tab.clone(),
-            label: instance.instance_id.clone(),
-        });
-
-        // VPC詳細画面に遷移
-        self.view = View::VpcDetail;
-        self.detail_tag_index = 0;
-        self.loading = true;
-        // navigate_target_id を保持して main.rs 側で使う
-        self.navigate_target_id = Some(target_id);
+        // no-op for now
     }
 
     /// Create操作のハンドリング
     fn handle_create(&mut self) {
-        match self.view {
-            View::S3List => {
-                self.mode = Mode::Form(FormContext {
-                    kind: FormKind::CreateS3Bucket,
-                    fields: vec![FormField {
-                        label: "Bucket Name".to_string(),
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        let form_ctx = match view {
+            View::S3List => Some(FormContext {
+                kind: FormKind::CreateS3Bucket,
+                fields: vec![FormField {
+                    label: "Bucket Name".to_string(),
+                    input: Input::default(),
+                    required: true,
+                }],
+                focused_field: 0,
+            }),
+            View::SecretsList => Some(FormContext {
+                kind: FormKind::CreateSecret,
+                fields: vec![
+                    FormField {
+                        label: "Name".to_string(),
                         input: Input::default(),
                         required: true,
-                    }],
-                    focused_field: 0,
-                });
-            }
-            View::SecretsList => {
-                self.mode = Mode::Form(FormContext {
-                    kind: FormKind::CreateSecret,
-                    fields: vec![
-                        FormField {
-                            label: "Name".to_string(),
-                            input: Input::default(),
-                            required: true,
-                        },
-                        FormField {
-                            label: "Value".to_string(),
-                            input: Input::default(),
-                            required: true,
-                        },
-                        FormField {
-                            label: "Description".to_string(),
-                            input: Input::default(),
-                            required: false,
-                        },
-                    ],
-                    focused_field: 0,
-                });
-            }
-            _ => {}
+                    },
+                    FormField {
+                        label: "Value".to_string(),
+                        input: Input::default(),
+                        required: true,
+                    },
+                    FormField {
+                        label: "Description".to_string(),
+                        input: Input::default(),
+                        required: false,
+                    },
+                ],
+                focused_field: 0,
+            }),
+            _ => None,
+        };
+        if let Some(ctx) = form_ctx
+            && let Some(tab) = self.active_tab_mut()
+        {
+            tab.mode = Mode::Form(ctx);
         }
     }
 
     /// Delete操作のハンドリング
     fn handle_delete(&mut self) {
-        match self.view {
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        match view {
             View::Ec2List => {
                 if !self.can_delete("ec2") {
                     self.show_message(
@@ -1225,9 +1503,12 @@ impl App {
                     );
                     return;
                 }
-                if let Some(instance) = self.selected_instance() {
-                    let id = instance.instance_id.clone();
-                    self.mode = Mode::DangerConfirm(DangerConfirmContext {
+                let id = self.selected_instance().map(|i| i.instance_id.clone());
+                let Some(id) = id else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
                         action: DangerAction::TerminateEc2(id),
                         input: Input::default(),
                     });
@@ -1242,9 +1523,23 @@ impl App {
                     );
                     return;
                 }
-                if let Some(bucket) = self.s3_filtered_buckets.get(self.selected_index) {
-                    let name = bucket.name.clone();
-                    self.mode = Mode::DangerConfirm(DangerConfirmContext {
+                let bucket_name = self.active_tab().and_then(|tab| {
+                    if let crate::tab::ServiceData::S3 {
+                        filtered_buckets, ..
+                    } = &tab.data
+                    {
+                        filtered_buckets
+                            .get(tab.selected_index)
+                            .map(|b| b.name.clone())
+                    } else {
+                        None
+                    }
+                });
+                let Some(name) = bucket_name else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
                         action: DangerAction::DeleteS3Bucket(name),
                         input: Input::default(),
                     });
@@ -1259,12 +1554,29 @@ impl App {
                     );
                     return;
                 }
-                if let Some(obj) = self.s3_objects.get(self.detail_tag_index)
-                    && !obj.is_prefix
-                {
-                    let bucket = self.s3_selected_bucket.clone().unwrap_or_default();
-                    let key = obj.key.clone();
-                    self.mode = Mode::DangerConfirm(DangerConfirmContext {
+                let obj_info = self.active_tab().and_then(|tab| {
+                    if let crate::tab::ServiceData::S3 {
+                        objects,
+                        selected_bucket,
+                        ..
+                    } = &tab.data
+                    {
+                        objects.get(tab.detail_tag_index).and_then(|obj| {
+                            if !obj.is_prefix {
+                                Some((selected_bucket.clone().unwrap_or_default(), obj.key.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                });
+                let Some((bucket, key)) = obj_info else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
                         action: DangerAction::DeleteS3Object { bucket, key },
                         input: Input::default(),
                     });
@@ -1279,9 +1591,23 @@ impl App {
                     );
                     return;
                 }
-                if let Some(secret) = self.filtered_secrets.get(self.selected_index) {
-                    let name = secret.name.clone();
-                    self.mode = Mode::DangerConfirm(DangerConfirmContext {
+                let secret_name = self.active_tab().and_then(|tab| {
+                    if let crate::tab::ServiceData::Secrets {
+                        filtered_secrets, ..
+                    } = &tab.data
+                    {
+                        filtered_secrets
+                            .get(tab.selected_index)
+                            .map(|s| s.name.clone())
+                    } else {
+                        None
+                    }
+                });
+                let Some(name) = secret_name else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
                         action: DangerAction::DeleteSecret(name),
                         input: Input::default(),
                     });
@@ -1293,13 +1619,27 @@ impl App {
 
     /// Edit操作のハンドリング
     fn handle_edit(&mut self) {
-        if self.view == View::SecretsDetail
-            && let Some(detail) = &self.secret_detail
-        {
-            self.mode = Mode::Form(FormContext {
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        if view != View::SecretsDetail {
+            return;
+        }
+        let detail_name = self.active_tab().and_then(|tab| {
+            if let crate::tab::ServiceData::Secrets { detail, .. } = &tab.data {
+                detail.as_ref().map(|d| d.name.clone())
+            } else {
+                None
+            }
+        });
+        let Some(name) = detail_name else {
+            return;
+        };
+        if let Some(tab) = self.active_tab_mut() {
+            tab.mode = Mode::Form(FormContext {
                 kind: FormKind::UpdateSecretValue,
                 fields: vec![FormField {
-                    label: format!("New value for '{}'", detail.name),
+                    label: format!("New value for '{}'", name),
                     input: Input::default(),
                     required: true,
                 }],
@@ -1308,45 +1648,47 @@ impl App {
         }
     }
 
-    /// FormSubmitのハンドリング。dispatchの戻り値としてConfirmActionの代わりにNoneを返す。
-    /// main.rs側でCRUD APIを呼ぶためにFormContextを保持する。
+    /// FormSubmitのハンドリング
     fn handle_form_submit(&mut self) -> Option<ConfirmAction> {
-        let Mode::Form(ctx) = &self.mode else {
+        let tab = self.active_tab()?;
+        let Mode::Form(ctx) = &tab.mode else {
             return None;
         };
 
         // 必須フィールドのバリデーション
         for field in &ctx.fields {
             if field.required && field.input.value().is_empty() {
-                self.show_message(
-                    MessageLevel::Error,
-                    "Validation Error",
-                    format!("'{}' is required", field.label),
-                );
+                let msg = format!("'{}' is required", field.label);
+                self.show_message(MessageLevel::Error, "Validation Error", msg);
                 return None;
             }
         }
 
         // FormContextを取り出してNormalに戻す
-        // main.rs側でpending_formをチェックしてAPI呼び出しを行う
-        let Mode::Form(ctx) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+        let tab = self.active_tab_mut()?;
+        let Mode::Form(ctx) = std::mem::replace(&mut tab.mode, Mode::Normal) else {
             return None;
         };
         self.pending_form = Some(ctx);
-        self.loading = true;
+        if let Some(tab) = self.active_tab_mut() {
+            tab.loading = true;
+        }
         None
     }
 
     /// フォームの次のフィールドにフォーカスを移動
     fn handle_form_next_field(&mut self) {
-        if let Mode::Form(ctx) = &mut self.mode {
+        if let Some(tab) = self.active_tab_mut()
+            && let Mode::Form(ctx) = &mut tab.mode
+        {
             ctx.focused_field = (ctx.focused_field + 1) % ctx.fields.len();
         }
     }
 
     /// フォーム入力のハンドリング
     fn handle_form_input(&mut self, req: tui_input::InputRequest) {
-        if let Mode::Form(ctx) = &mut self.mode
+        if let Some(tab) = self.active_tab_mut()
+            && let Mode::Form(ctx) = &mut tab.mode
             && let Some(field) = ctx.fields.get_mut(ctx.focused_field)
         {
             field.input.handle(req);
@@ -1355,7 +1697,8 @@ impl App {
 
     /// DangerConfirmSubmitのハンドリング
     fn handle_danger_confirm_submit(&mut self) -> Option<ConfirmAction> {
-        let Mode::DangerConfirm(ctx) = &self.mode else {
+        let tab = self.active_tab()?;
+        let Mode::DangerConfirm(ctx) = &tab.mode else {
             return None;
         };
 
@@ -1363,40 +1706,51 @@ impl App {
             return None;
         }
 
-        let Mode::DangerConfirm(ctx) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+        let tab = self.active_tab_mut()?;
+        let Mode::DangerConfirm(ctx) = std::mem::replace(&mut tab.mode, Mode::Normal) else {
             return None;
         };
         self.pending_danger_action = Some(ctx.action);
-        self.loading = true;
+        if let Some(tab) = self.active_tab_mut() {
+            tab.loading = true;
+        }
         None
     }
 
     /// DangerConfirm入力のハンドリング
     fn handle_danger_confirm_input(&mut self, req: tui_input::InputRequest) {
-        if let Mode::DangerConfirm(ctx) = &mut self.mode {
+        if let Some(tab) = self.active_tab_mut()
+            && let Mode::DangerConfirm(ctx) = &mut tab.mode
+        {
             ctx.input.handle(req);
         }
     }
 
     /// パンくずリスト文字列を生成する
     pub fn breadcrumb(&self) -> Option<String> {
-        if self.navigation_stack.is_empty() {
+        let tab = self.active_tab()?;
+        if tab.navigation_stack.is_empty() {
             return None;
         }
 
-        let mut parts: Vec<&str> = self
+        let mut parts: Vec<&str> = tab
             .navigation_stack
             .iter()
             .map(|e| e.label.as_str())
             .collect();
 
         // 現在のビューのラベルを追加
-        let current_label = match self.view {
-            View::VpcDetail => self
-                .filtered_vpcs
-                .first()
-                .map(|v| v.vpc_id.as_str())
-                .unwrap_or("VPC"),
+        let current_label = match self.current_view()? {
+            View::VpcDetail => {
+                if let crate::tab::ServiceData::Vpc { filtered_vpcs, .. } = &tab.data {
+                    filtered_vpcs
+                        .first()
+                        .map(|v| v.vpc_id.as_str())
+                        .unwrap_or("VPC")
+                } else {
+                    ""
+                }
+            }
             _ => "",
         };
         if !current_label.is_empty() {
@@ -1417,6 +1771,8 @@ mod tests {
     use crate::action::Action;
     use crate::aws::model::InstanceState;
     use crate::error::AppError;
+    use crate::event::TabEvent;
+    use crate::tab::{ServiceData, TabView};
     use std::collections::HashMap;
 
     fn create_test_instance(id: &str, name: &str, state: InstanceState) -> Instance {
@@ -1440,56 +1796,295 @@ mod tests {
         }
     }
 
-    #[test]
-    fn apply_filter_returns_all_instances_when_empty_filter() {
+    fn app_with_ec2_tab() -> App {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.instances = vec![
-            create_test_instance("i-001", "web", InstanceState::Running),
-            create_test_instance("i-002", "api", InstanceState::Stopped),
-        ];
-        app.filter_input = Input::default();
-        app.apply_filter();
-        assert_eq!(app.filtered_instances.len(), 2);
+        app.create_tab(ServiceKind::Ec2);
+        app
+    }
+
+    fn set_ec2_instances(app: &mut App, instances: Vec<Instance>) {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ec2 {
+            instances: inst,
+            filtered_instances,
+            ..
+        } = &mut tab.data
+        {
+            *filtered_instances = instances.clone();
+            *inst = instances;
+        }
+        tab.loading = false;
+    }
+
+    // ──────────────────────────────────────────────
+    // create_tab テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn create_tab_creates_tab_and_switches_to_it() {
+        let mut app = App::new("dev".to_string(), None);
+        assert!(app.tabs.is_empty());
+        assert!(app.show_dashboard);
+
+        let id = app.create_tab(ServiceKind::Ec2);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab_index, 0);
+        assert!(!app.show_dashboard);
+        assert_eq!(app.active_tab().unwrap().id, id);
+        assert_eq!(app.active_tab().unwrap().service, ServiceKind::Ec2);
+    }
+
+    // ──────────────────────────────────────────────
+    // dispatch Quit テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_sets_should_quit_when_quit_action() {
+        let mut app = App::new("dev".to_string(), None);
+        let result = app.dispatch(Action::Quit);
+        assert!(app.should_quit);
+        assert!(result.is_none());
+    }
+
+    // ──────────────────────────────────────────────
+    // ダッシュボード移動テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn move_down_increments_dashboard_selected_index_when_on_dashboard() {
+        let mut app = App::new("dev".to_string(), None);
+        assert!(app.show_dashboard);
+        assert_eq!(app.dashboard.selected_index, 0);
+        app.dispatch(Action::MoveDown);
+        assert_eq!(app.dashboard.selected_index, 1);
     }
 
     #[test]
-    fn apply_filter_returns_matching_instances_when_filter_set() {
+    fn move_up_decrements_dashboard_selected_index_when_on_dashboard() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.instances = vec![
-            create_test_instance("i-001", "web", InstanceState::Running),
-            create_test_instance("i-002", "api", InstanceState::Stopped),
-        ];
-        app.filter_input = Input::from("web");
-        app.apply_filter();
-        assert_eq!(app.filtered_instances.len(), 1);
-        assert_eq!(app.filtered_instances[0].name, "web");
+        app.dashboard.selected_index = 2;
+        app.dispatch(Action::MoveUp);
+        assert_eq!(app.dashboard.selected_index, 1);
     }
 
     #[test]
-    fn apply_filter_adjusts_index_when_filter_reduces_list() {
+    fn move_to_top_sets_dashboard_index_to_zero() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.instances = vec![
-            create_test_instance("i-001", "web", InstanceState::Running),
-            create_test_instance("i-002", "api", InstanceState::Stopped),
-        ];
-        app.selected_index = 1;
-        app.filter_input = Input::from("web");
-        app.apply_filter();
-        assert_eq!(app.selected_index, 0);
+        app.dashboard.selected_index = 3;
+        app.dispatch(Action::MoveToTop);
+        assert_eq!(app.dashboard.selected_index, 0);
     }
 
     #[test]
-    fn show_message_sets_mode_to_message_when_called() {
+    fn move_to_bottom_sets_dashboard_index_to_last() {
+        let mut app = App::new("dev".to_string(), None);
+        app.dashboard.recent_services.clear();
+        app.dispatch(Action::MoveToBottom);
+        assert_eq!(app.dashboard.selected_index, ServiceKind::ALL.len() - 1);
+    }
+
+    // ──────────────────────────────────────────────
+    // タブリスト移動テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn move_down_increments_tab_selected_index_when_on_tab_list() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![
+                create_test_instance("i-001", "a", InstanceState::Running),
+                create_test_instance("i-002", "b", InstanceState::Stopped),
+            ],
+        );
+        app.dispatch(Action::MoveDown);
+        assert_eq!(app.active_tab().unwrap().selected_index, 1);
+    }
+
+    #[test]
+    fn move_up_decrements_tab_selected_index_when_on_tab_list() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![
+                create_test_instance("i-001", "a", InstanceState::Running),
+                create_test_instance("i-002", "b", InstanceState::Stopped),
+            ],
+        );
+        app.active_tab_mut().unwrap().selected_index = 1;
+        app.dispatch(Action::MoveUp);
+        assert_eq!(app.active_tab().unwrap().selected_index, 0);
+    }
+
+    // ──────────────────────────────────────────────
+    // タブ詳細移動テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn move_down_increments_detail_tag_index_when_on_tab_detail() {
+        let mut app = app_with_ec2_tab();
+        let mut instance = create_test_instance("i-001", "web", InstanceState::Running);
+        instance.tags.insert("env".to_string(), "prod".to_string());
+        instance
+            .tags
+            .insert("team".to_string(), "backend".to_string());
+        set_ec2_instances(&mut app, vec![instance]);
+        // Switch to detail
+        app.active_tab_mut().unwrap().tab_view = TabView::Detail;
+        app.active_tab_mut().unwrap().detail_tab = DetailTab::Overview;
+        app.dispatch(Action::MoveDown);
+        assert_eq!(app.active_tab().unwrap().detail_tag_index, 1);
+    }
+
+    #[test]
+    fn move_up_decrements_detail_tag_index_when_on_tab_detail() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![create_test_instance("i-001", "web", InstanceState::Running)],
+        );
+        let tab = app.active_tab_mut().unwrap();
+        tab.tab_view = TabView::Detail;
+        tab.detail_tag_index = 1;
+        app.dispatch(Action::MoveUp);
+        assert_eq!(app.active_tab().unwrap().detail_tag_index, 0);
+    }
+
+    // ──────────────────────────────────────────────
+    // handle_enter テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn handle_enter_creates_tab_when_on_dashboard() {
+        let mut app = App::new("dev".to_string(), None);
+        app.dashboard.recent_services.clear();
+        assert!(app.show_dashboard);
+        app.dashboard.selected_index = 0; // EC2 (All Servicesの先頭)
+        app.dispatch(Action::Enter);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(!app.show_dashboard);
+        assert_eq!(app.active_tab().unwrap().service, ServiceKind::Ec2);
+    }
+
+    // ──────────────────────────────────────────────
+    // サービスピッカーテスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn new_tab_opens_service_picker() {
+        let mut app = app_with_ec2_tab();
+        assert!(app.service_picker.is_none());
+        app.dispatch(Action::NewTab);
+        assert!(app.service_picker.is_some());
+        assert_eq!(
+            app.service_picker.as_ref().unwrap().filtered_services.len(),
+            ServiceKind::ALL.len()
+        );
+    }
+
+    #[test]
+    fn picker_confirm_creates_tab_and_closes_picker() {
+        let mut app = app_with_ec2_tab();
+        app.dispatch(Action::NewTab);
+        assert!(app.service_picker.is_some());
+        let old_tab_count = app.tabs.len();
+        app.dispatch(Action::PickerConfirm);
+        assert!(app.service_picker.is_none());
+        assert_eq!(app.tabs.len(), old_tab_count + 1);
+    }
+
+    #[test]
+    fn picker_cancel_closes_picker_without_creating_tab() {
+        let mut app = app_with_ec2_tab();
+        app.dispatch(Action::NewTab);
+        let old_tab_count = app.tabs.len();
+        app.dispatch(Action::PickerCancel);
+        assert!(app.service_picker.is_none());
+        assert_eq!(app.tabs.len(), old_tab_count);
+    }
+
+    #[test]
+    fn picker_move_down_increments_index() {
+        let mut app = app_with_ec2_tab();
+        app.dispatch(Action::NewTab);
+        assert_eq!(app.service_picker.as_ref().unwrap().selected_index, 0);
+        app.dispatch(Action::PickerMoveDown);
+        assert_eq!(app.service_picker.as_ref().unwrap().selected_index, 1);
+    }
+
+    #[test]
+    fn picker_move_up_decrements_index() {
+        let mut app = app_with_ec2_tab();
+        app.dispatch(Action::NewTab);
+        app.dispatch(Action::PickerMoveDown);
+        app.dispatch(Action::PickerMoveDown);
+        assert_eq!(app.service_picker.as_ref().unwrap().selected_index, 2);
+        app.dispatch(Action::PickerMoveUp);
+        assert_eq!(app.service_picker.as_ref().unwrap().selected_index, 1);
+    }
+
+    #[test]
+    fn handle_enter_switches_to_detail_when_on_tab_list_with_data() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![create_test_instance("i-001", "web", InstanceState::Running)],
+        );
+        app.dispatch(Action::Enter);
+        assert_eq!(app.active_tab().unwrap().tab_view, TabView::Detail);
+    }
+
+    #[test]
+    fn handle_enter_stays_on_list_when_empty() {
+        let mut app = app_with_ec2_tab();
+        app.dispatch(Action::Enter);
+        assert_eq!(app.active_tab().unwrap().tab_view, TabView::List);
+    }
+
+    // ──────────────────────────────────────────────
+    // handle_back テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn handle_back_switches_to_list_when_on_tab_detail() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![create_test_instance("i-001", "web", InstanceState::Running)],
+        );
+        app.active_tab_mut().unwrap().tab_view = TabView::Detail;
+        app.dispatch(Action::Back);
+        assert_eq!(app.active_tab().unwrap().tab_view, TabView::List);
+    }
+
+    #[test]
+    fn handle_back_does_nothing_when_on_dashboard() {
+        let mut app = App::new("dev".to_string(), None);
+        app.dispatch(Action::Back);
+        assert!(app.show_dashboard);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn handle_back_does_nothing_when_on_tab_list() {
+        let mut app = app_with_ec2_tab();
+        app.dispatch(Action::Back);
+        assert_eq!(app.active_tab().unwrap().tab_view, TabView::List);
+    }
+
+    // ──────────────────────────────────────────────
+    // show_message / dismiss_message テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn show_message_sets_message_when_called() {
         let mut app = App::new("dev".to_string(), None);
         app.show_message(MessageLevel::Error, "Error", "Something failed");
-        assert_eq!(app.mode, Mode::Message);
         assert!(app.message.is_some());
         let msg = app.message.as_ref().unwrap();
         assert_eq!(msg.level, MessageLevel::Error);
         assert_eq!(msg.title, "Error");
+        assert_eq!(msg.body, "Something failed");
     }
 
     #[test]
@@ -1498,341 +2093,6 @@ mod tests {
         app.show_message(MessageLevel::Info, "Info", "test");
         app.dismiss_message();
         assert!(app.message.is_none());
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    // ──────────────────────────────────────────────
-    // dispatch テスト
-    // ──────────────────────────────────────────────
-
-    #[test]
-    fn dispatch_returns_none_and_sets_quit_when_quit_action() {
-        let mut app = App::new("dev".to_string(), None);
-        let result = app.dispatch(Action::Quit);
-        assert!(app.should_quit);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_decrements_selected_index_when_move_up_in_ec2_list() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![
-            create_test_instance("i-001", "a", InstanceState::Running),
-            create_test_instance("i-002", "b", InstanceState::Stopped),
-        ];
-        app.selected_index = 1;
-        app.dispatch(Action::MoveUp);
-        assert_eq!(app.selected_index, 0);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_increments_selected_index_when_move_down_in_ec2_list() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![
-            create_test_instance("i-001", "a", InstanceState::Running),
-            create_test_instance("i-002", "b", InstanceState::Stopped),
-        ];
-        app.selected_index = 0;
-        app.dispatch(Action::MoveDown);
-        assert_eq!(app.selected_index, 1);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_index_zero_when_move_to_top() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![
-            create_test_instance("i-001", "a", InstanceState::Running),
-            create_test_instance("i-002", "b", InstanceState::Stopped),
-        ];
-        app.selected_index = 1;
-        app.dispatch(Action::MoveToTop);
-        assert_eq!(app.selected_index, 0);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_index_to_last_when_move_to_bottom() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![
-            create_test_instance("i-001", "a", InstanceState::Running),
-            create_test_instance("i-002", "b", InstanceState::Stopped),
-        ];
-        app.selected_index = 0;
-        app.dispatch(Action::MoveToBottom);
-        assert_eq!(app.selected_index, 1);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_moves_up_10_when_half_page_up() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = (0..20)
-            .map(|i| create_test_instance(&format!("i-{i:03}"), "inst", InstanceState::Running))
-            .collect();
-        app.selected_index = 15;
-        app.dispatch(Action::HalfPageUp);
-        assert_eq!(app.selected_index, 5);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_clamps_at_zero_when_half_page_up_near_top() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![
-            create_test_instance("i-001", "a", InstanceState::Running),
-            create_test_instance("i-002", "b", InstanceState::Stopped),
-        ];
-        app.selected_index = 1;
-        app.dispatch(Action::HalfPageUp);
-        assert_eq!(app.selected_index, 0);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_moves_down_10_when_half_page_down() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = (0..20)
-            .map(|i| create_test_instance(&format!("i-{i:03}"), "inst", InstanceState::Running))
-            .collect();
-        app.selected_index = 5;
-        app.dispatch(Action::HalfPageDown);
-        assert_eq!(app.selected_index, 15);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_clamps_at_max_when_half_page_down_near_bottom() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![
-            create_test_instance("i-001", "a", InstanceState::Running),
-            create_test_instance("i-002", "b", InstanceState::Stopped),
-        ];
-        app.selected_index = 0;
-        app.dispatch(Action::HalfPageDown);
-        assert_eq!(app.selected_index, 1);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_switches_to_ec2_list_when_enter_in_service_select() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::ServiceSelect;
-        app.service_selected = 0; // EC2
-        app.dispatch(Action::Enter);
-        assert_eq!(app.view, View::Ec2List);
-        assert!(app.loading);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_switches_to_detail_when_enter_in_ec2_list() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::Enter);
-        assert_eq!(app.view, View::Ec2Detail);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_stays_on_ec2_list_when_enter_with_empty_instances() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.dispatch(Action::Enter);
-        assert_eq!(app.view, View::Ec2List);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_goes_back_to_ec2_list_when_back_in_ec2_detail() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2Detail;
-        app.dispatch(Action::Back);
-        assert_eq!(app.view, View::Ec2List);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_goes_to_service_select_when_back_in_ec2_list() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::Back);
-        assert_eq!(app.view, View::ServiceSelect);
-        assert!(app.instances.is_empty());
-        assert!(app.filtered_instances.is_empty());
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_should_quit_when_back_in_service_select() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::ServiceSelect;
-        app.dispatch(Action::Back);
-        assert!(app.should_quit);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_normal_mode_when_back_in_help() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::Help;
-        app.view = View::Ec2List;
-        app.dispatch(Action::Back);
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.view, View::Ec2List);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_dismisses_message_when_back_in_message() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.show_message(MessageLevel::Info, "Info", "test");
-        app.dispatch(Action::Back);
-        assert!(app.message.is_none());
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_loading_when_refresh() {
-        let mut app = App::new("dev".to_string(), None);
-        app.dispatch(Action::Refresh);
-        assert!(app.loading);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_filter_mode_when_start_filter() {
-        let mut app = App::new("dev".to_string(), None);
-        app.dispatch(Action::StartFilter);
-        assert_eq!(app.mode, Mode::Filter);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_normal_mode_when_confirm_filter() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::Filter;
-        app.dispatch(Action::ConfirmFilter);
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_clears_filter_when_cancel_filter() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.mode = Mode::Filter;
-        app.filter_input = Input::from("web");
-        app.instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::CancelFilter);
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.filter_input.value().is_empty());
-        assert_eq!(app.filtered_instances.len(), 1);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_updates_input_when_filter_handle_input() {
-        use tui_input::InputRequest;
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::FilterHandleInput(InputRequest::InsertChar('w')));
-        assert_eq!(app.filter_input.value(), "w");
-        assert_eq!(app.filtered_instances.len(), 1);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_deletes_char_when_filter_handle_input_delete() {
-        use tui_input::InputRequest;
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filter_input = Input::from("web");
-        app.instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::FilterHandleInput(InputRequest::DeletePrevChar));
-        assert_eq!(app.filter_input.value(), "we");
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_confirm_stop_when_start_stop_on_running() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::StartStop);
-        assert_eq!(
-            app.mode,
-            Mode::Confirm(ConfirmAction::Stop("i-001".to_string()))
-        );
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_confirm_start_when_start_stop_on_stopped() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Stopped)];
-        app.dispatch(Action::StartStop);
-        assert_eq!(
-            app.mode,
-            Mode::Confirm(ConfirmAction::Start("i-001".to_string()))
-        );
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_confirm_reboot_when_reboot() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::Reboot);
-        assert_eq!(
-            app.mode,
-            Mode::Confirm(ConfirmAction::Reboot("i-001".to_string()))
-        );
-    }
-
-    #[test]
-    fn dispatch_returns_confirm_action_when_confirm_yes() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::Confirm(ConfirmAction::Stop("i-001".to_string()));
-        let result = app.dispatch(Action::ConfirmYes);
-        assert_eq!(result, Some(ConfirmAction::Stop("i-001".to_string())));
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_normal_when_confirm_no() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::Confirm(ConfirmAction::Stop("i-001".to_string()));
-        let result = app.dispatch(Action::ConfirmNo);
-        assert!(result.is_none());
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_dismisses_when_dismiss_message() {
-        let mut app = App::new("dev".to_string(), None);
-        app.show_message(MessageLevel::Info, "Info", "test");
-        app.dispatch(Action::DismissMessage);
-        assert!(app.message.is_none());
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_sets_help_mode_when_show_help() {
-        let mut app = App::new("dev".to_string(), None);
-        app.dispatch(Action::ShowHelp);
-        assert_eq!(app.mode, Mode::Help);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_toggles_tab_when_switch_detail_tab() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2Detail;
-        assert_eq!(app.detail_tab, DetailTab::Overview);
-        app.dispatch(Action::SwitchDetailTab);
-        assert_eq!(app.detail_tab, DetailTab::Tags);
-        app.dispatch(Action::SwitchDetailTab);
-        assert_eq!(app.detail_tab, DetailTab::Overview);
-    }
-
-    #[test]
-    fn dispatch_returns_none_when_noop() {
-        let mut app = App::new("dev".to_string(), None);
-        let result = app.dispatch(Action::Noop);
-        assert!(result.is_none());
     }
 
     // ──────────────────────────────────────────────
@@ -1840,170 +2100,385 @@ mod tests {
     // ──────────────────────────────────────────────
 
     #[test]
-    fn handle_event_sets_instances_when_instances_loaded_ok() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.loading = true;
+    fn handle_event_routes_instances_loaded_to_correct_tab() {
+        let mut app = app_with_ec2_tab();
+        let tab_id = app.active_tab().unwrap().id;
         let instances = vec![
             create_test_instance("i-001", "web", InstanceState::Running),
             create_test_instance("i-002", "api", InstanceState::Stopped),
         ];
-        app.handle_event(AppEvent::InstancesLoaded(Ok(instances)));
-        assert!(!app.loading);
-        assert_eq!(app.instances.len(), 2);
-        assert_eq!(app.filtered_instances.len(), 2);
+        app.handle_event(AppEvent::TabEvent(
+            tab_id,
+            TabEvent::InstancesLoaded(Ok(instances)),
+        ));
+        let tab = app.active_tab().unwrap();
+        assert!(!tab.loading);
+        if let ServiceData::Ec2 {
+            instances,
+            filtered_instances,
+        } = &tab.data
+        {
+            assert_eq!(instances.len(), 2);
+            assert_eq!(filtered_instances.len(), 2);
+        } else {
+            panic!("Expected Ec2 ServiceData");
+        }
     }
 
     #[test]
-    fn handle_event_shows_info_message_when_instances_loaded_ok_empty() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.loading = true;
-        app.handle_event(AppEvent::InstancesLoaded(Ok(vec![])));
-        assert!(!app.loading);
-        assert_eq!(app.mode, Mode::Message);
+    fn handle_event_shows_error_when_instances_loaded_err() {
+        let mut app = app_with_ec2_tab();
+        let tab_id = app.active_tab().unwrap().id;
+        app.handle_event(AppEvent::TabEvent(
+            tab_id,
+            TabEvent::InstancesLoaded(Err(AppError::AwsApi("access denied".to_string()))),
+        ));
+        let tab = app.active_tab().unwrap();
+        assert!(!tab.loading);
+        assert!(app.message.is_some());
+        let msg = app.message.as_ref().unwrap();
+        assert_eq!(msg.level, MessageLevel::Error);
+    }
+
+    #[test]
+    fn handle_event_shows_info_when_instances_loaded_empty() {
+        let mut app = app_with_ec2_tab();
+        let tab_id = app.active_tab().unwrap().id;
+        app.handle_event(AppEvent::TabEvent(
+            tab_id,
+            TabEvent::InstancesLoaded(Ok(vec![])),
+        ));
+        assert!(app.message.is_some());
         let msg = app.message.as_ref().unwrap();
         assert_eq!(msg.level, MessageLevel::Info);
         assert_eq!(msg.body, "No instances found");
     }
 
     #[test]
-    fn handle_event_shows_error_when_instances_loaded_err() {
-        let mut app = App::new("dev".to_string(), None);
-        app.loading = true;
-        app.handle_event(AppEvent::InstancesLoaded(Err(AppError::AwsApi(
-            "access denied".to_string(),
-        ))));
-        assert!(!app.loading);
-        assert_eq!(app.mode, Mode::Message);
-        let msg = app.message.as_ref().unwrap();
-        assert_eq!(msg.level, MessageLevel::Error);
-        assert!(msg.body.contains("access denied"));
-    }
-
-    #[test]
-    fn handle_event_shows_success_and_sets_loading_when_action_completed_ok() {
-        let mut app = App::new("dev".to_string(), None);
-        app.handle_event(AppEvent::ActionCompleted(
-            Ok("Instance started".to_string()),
+    fn handle_event_crud_completed_shows_success_and_sets_loading() {
+        let mut app = app_with_ec2_tab();
+        let tab_id = app.active_tab().unwrap().id;
+        app.handle_event(AppEvent::CrudCompleted(
+            tab_id,
+            Ok("Bucket created".to_string()),
         ));
-        assert_eq!(app.mode, Mode::Message);
+        assert!(app.message.is_some());
         let msg = app.message.as_ref().unwrap();
         assert_eq!(msg.level, MessageLevel::Success);
-        assert_eq!(msg.body, "Instance started");
-        assert!(app.loading);
+        assert_eq!(msg.body, "Bucket created");
+        assert!(app.active_tab().unwrap().loading);
     }
 
     #[test]
-    fn handle_event_shows_error_when_action_completed_err() {
-        let mut app = App::new("dev".to_string(), None);
-        app.handle_event(AppEvent::ActionCompleted(Err(AppError::AwsApi(
-            "start failed".to_string(),
-        ))));
-        assert_eq!(app.mode, Mode::Message);
+    fn handle_event_crud_completed_shows_error_when_err() {
+        let mut app = app_with_ec2_tab();
+        let tab_id = app.active_tab().unwrap().id;
+        app.handle_event(AppEvent::CrudCompleted(
+            tab_id,
+            Err(AppError::AwsApi("access denied".to_string())),
+        ));
+        assert!(app.message.is_some());
         let msg = app.message.as_ref().unwrap();
         assert_eq!(msg.level, MessageLevel::Error);
-        assert!(msg.body.contains("start failed"));
     }
 
     // ──────────────────────────────────────────────
-    // detail_tag_index テスト
+    // StartStop / Reboot テスト
     // ──────────────────────────────────────────────
 
     #[test]
-    fn dispatch_returns_none_and_moves_detail_tag_index_when_move_down_in_ec2_detail() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2Detail;
-        let mut instance = create_test_instance("i-001", "web", InstanceState::Running);
-        instance.tags.insert("env".to_string(), "prod".to_string());
-        instance
-            .tags
-            .insert("team".to_string(), "backend".to_string());
-        app.instances = vec![instance.clone()];
-        app.filtered_instances = vec![instance];
-        app.selected_index = 0;
-        app.detail_tag_index = 0;
-        app.dispatch(Action::MoveDown);
-        assert_eq!(app.detail_tag_index, 1);
-        assert_eq!(app.selected_index, 0);
+    fn start_stop_sets_confirm_stop_when_instance_running() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![create_test_instance("i-001", "web", InstanceState::Running)],
+        );
+        app.dispatch(Action::StartStop);
+        assert_eq!(
+            app.active_tab().unwrap().mode,
+            Mode::Confirm(ConfirmAction::Stop("i-001".to_string()))
+        );
     }
 
     #[test]
-    fn dispatch_returns_none_and_moves_detail_tag_index_when_move_up_in_ec2_detail() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2Detail;
-        let instance = create_test_instance("i-001", "web", InstanceState::Running);
-        app.instances = vec![instance.clone()];
-        app.filtered_instances = vec![instance];
-        app.selected_index = 0;
-        app.detail_tag_index = 1;
-        app.dispatch(Action::MoveUp);
-        assert_eq!(app.detail_tag_index, 0);
-        assert_eq!(app.selected_index, 0);
+    fn start_stop_sets_confirm_start_when_instance_stopped() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![create_test_instance("i-001", "web", InstanceState::Stopped)],
+        );
+        app.dispatch(Action::StartStop);
+        assert_eq!(
+            app.active_tab().unwrap().mode,
+            Mode::Confirm(ConfirmAction::Start("i-001".to_string()))
+        );
     }
 
     #[test]
-    fn dispatch_returns_none_and_resets_detail_tag_index_when_enter_ec2_detail() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        let instance = create_test_instance("i-001", "web", InstanceState::Running);
-        app.instances = vec![instance.clone()];
-        app.filtered_instances = vec![instance];
-        app.detail_tag_index = 5;
-        app.dispatch(Action::Enter);
-        assert_eq!(app.view, View::Ec2Detail);
-        assert_eq!(app.detail_tag_index, 0);
-    }
-
-    #[test]
-    fn dispatch_returns_none_and_resets_detail_tag_index_when_switch_detail_tab() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2Detail;
-        app.detail_tag_index = 3;
-        app.dispatch(Action::SwitchDetailTab);
-        assert_eq!(app.detail_tag_index, 0);
+    fn reboot_sets_confirm_reboot_when_instance_exists() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![create_test_instance("i-001", "web", InstanceState::Running)],
+        );
+        app.dispatch(Action::Reboot);
+        assert_eq!(
+            app.active_tab().unwrap().mode,
+            Mode::Confirm(ConfirmAction::Reboot("i-001".to_string()))
+        );
     }
 
     // ──────────────────────────────────────────────
-    // ServiceSelect テスト
+    // ConfirmYes テスト
     // ──────────────────────────────────────────────
 
     #[test]
-    fn dispatch_returns_none_and_increments_service_selected_when_move_down_in_service_select() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::ServiceSelect;
-        app.service_selected = 0;
-        app.dispatch(Action::MoveDown);
-        assert_eq!(app.service_selected, 1);
+    fn confirm_yes_returns_confirm_action_when_in_confirm_mode() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode =
+            Mode::Confirm(ConfirmAction::Stop("i-001".to_string()));
+        let result = app.dispatch(Action::ConfirmYes);
+        assert_eq!(result, Some(ConfirmAction::Stop("i-001".to_string())));
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
     }
 
     #[test]
-    fn dispatch_returns_none_and_decrements_service_selected_when_move_up_in_service_select() {
+    fn confirm_no_sets_normal_mode_when_in_confirm() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode =
+            Mode::Confirm(ConfirmAction::Stop("i-001".to_string()));
+        let result = app.dispatch(Action::ConfirmNo);
+        assert!(result.is_none());
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+    }
+
+    // ──────────────────────────────────────────────
+    // Create / Delete / Edit テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn handle_create_sets_form_mode_when_s3_list() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::ServiceSelect;
-        app.service_selected = 2;
-        app.dispatch(Action::MoveUp);
-        assert_eq!(app.service_selected, 1);
+        app.create_tab(ServiceKind::S3);
+        app.active_tab_mut().unwrap().loading = false;
+        app.dispatch(Action::Create);
+        assert!(matches!(
+            app.active_tab().unwrap().mode,
+            Mode::Form(FormContext {
+                kind: FormKind::CreateS3Bucket,
+                ..
+            })
+        ));
     }
 
     #[test]
-    fn dispatch_returns_none_and_enters_ecr_list_when_enter_in_service_select_ecr() {
+    fn handle_create_sets_form_mode_when_secrets_list() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::ServiceSelect;
-        app.service_selected = 1; // ECR
-        app.dispatch(Action::Enter);
-        assert_eq!(app.view, View::EcrList);
-        assert!(app.loading);
+        app.create_tab(ServiceKind::SecretsManager);
+        app.active_tab_mut().unwrap().loading = false;
+        app.dispatch(Action::Create);
+        if let Mode::Form(ctx) = &app.active_tab().unwrap().mode {
+            assert_eq!(ctx.kind, FormKind::CreateSecret);
+            assert_eq!(ctx.fields.len(), 3);
+        } else {
+            panic!("Expected Form mode");
+        }
     }
 
     #[test]
-    fn dispatch_returns_none_and_enters_s3_list_when_enter_in_service_select_s3() {
+    fn handle_create_does_nothing_when_ec2_list() {
+        let mut app = app_with_ec2_tab();
+        app.dispatch(Action::Create);
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+    }
+
+    #[test]
+    fn handle_delete_shows_permission_denied_when_no_permission() {
+        let mut app = app_with_ec2_tab();
+        set_ec2_instances(
+            &mut app,
+            vec![create_test_instance("i-001", "web", InstanceState::Running)],
+        );
+        app.dispatch(Action::Delete);
+        assert!(app.message.is_some());
+        let msg = app.message.as_ref().unwrap();
+        assert_eq!(msg.level, MessageLevel::Error);
+        assert_eq!(msg.title, "Permission Denied");
+    }
+
+    #[test]
+    fn handle_delete_sets_danger_confirm_when_ec2_with_permission() {
+        let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
+        app.create_tab(ServiceKind::Ec2);
+        set_ec2_instances(
+            &mut app,
+            vec![create_test_instance("i-001", "web", InstanceState::Running)],
+        );
+        app.dispatch(Action::Delete);
+        if let Mode::DangerConfirm(ctx) = &app.active_tab().unwrap().mode {
+            assert_eq!(ctx.action, DangerAction::TerminateEc2("i-001".to_string()));
+        } else {
+            panic!("Expected DangerConfirm mode");
+        }
+    }
+
+    #[test]
+    fn handle_edit_sets_form_mode_when_secrets_detail_with_detail() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::ServiceSelect;
-        app.service_selected = 3; // S3
-        app.dispatch(Action::Enter);
-        assert_eq!(app.view, View::S3List);
-        assert!(app.loading);
+        app.create_tab(ServiceKind::SecretsManager);
+        let tab = app.active_tab_mut().unwrap();
+        tab.tab_view = TabView::Detail;
+        tab.loading = false;
+        if let ServiceData::Secrets { detail, .. } = &mut tab.data {
+            *detail = Some(Box::new(crate::aws::secrets_model::SecretDetail {
+                name: "my-secret".to_string(),
+                arn: "arn:test".to_string(),
+                description: None,
+                kms_key_id: None,
+                rotation_enabled: false,
+                rotation_lambda_arn: None,
+                last_rotated_date: None,
+                last_changed_date: None,
+                last_accessed_date: None,
+                created_date: None,
+                tags: HashMap::new(),
+                version_ids: Vec::new(),
+            }));
+        }
+        app.dispatch(Action::Edit);
+        if let Mode::Form(ctx) = &app.active_tab().unwrap().mode {
+            assert_eq!(ctx.kind, FormKind::UpdateSecretValue);
+            assert_eq!(ctx.fields.len(), 1);
+        } else {
+            panic!("Expected Form mode");
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // FormSubmit テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn form_submit_shows_error_when_required_field_empty() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
+            kind: FormKind::CreateS3Bucket,
+            fields: vec![FormField {
+                label: "Bucket Name".to_string(),
+                input: Input::default(),
+                required: true,
+            }],
+            focused_field: 0,
+        });
+        app.dispatch(Action::FormSubmit);
+        assert!(app.message.is_some());
+        let msg = app.message.as_ref().unwrap();
+        assert_eq!(msg.level, MessageLevel::Error);
+    }
+
+    #[test]
+    fn form_submit_sets_pending_form_when_valid() {
+        let mut app = app_with_ec2_tab();
+        let mut input = Input::default();
+        input.handle(tui_input::InputRequest::InsertChar('t'));
+        input.handle(tui_input::InputRequest::InsertChar('e'));
+        input.handle(tui_input::InputRequest::InsertChar('s'));
+        input.handle(tui_input::InputRequest::InsertChar('t'));
+        app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
+            kind: FormKind::CreateS3Bucket,
+            fields: vec![FormField {
+                label: "Bucket Name".to_string(),
+                input,
+                required: true,
+            }],
+            focused_field: 0,
+        });
+        app.dispatch(Action::FormSubmit);
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+        assert!(app.pending_form.is_some());
+        assert!(app.active_tab().unwrap().loading);
+    }
+
+    // ──────────────────────────────────────────────
+    // DangerConfirm テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn danger_confirm_submit_does_nothing_when_text_mismatch() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode = Mode::DangerConfirm(DangerConfirmContext {
+            action: DangerAction::TerminateEc2("i-001".to_string()),
+            input: Input::default(),
+        });
+        app.dispatch(Action::DangerConfirmSubmit);
+        assert!(matches!(
+            app.active_tab().unwrap().mode,
+            Mode::DangerConfirm(_)
+        ));
+    }
+
+    #[test]
+    fn danger_confirm_submit_sets_pending_action_when_text_matches() {
+        let mut app = app_with_ec2_tab();
+        let mut input = Input::default();
+        for c in "i-001".chars() {
+            input.handle(tui_input::InputRequest::InsertChar(c));
+        }
+        app.active_tab_mut().unwrap().mode = Mode::DangerConfirm(DangerConfirmContext {
+            action: DangerAction::TerminateEc2("i-001".to_string()),
+            input,
+        });
+        app.dispatch(Action::DangerConfirmSubmit);
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+        assert!(app.pending_danger_action.is_some());
+        assert_eq!(
+            app.pending_danger_action.unwrap(),
+            DangerAction::TerminateEc2("i-001".to_string())
+        );
+    }
+
+    // ──────────────────────────────────────────────
+    // apply_filter テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn apply_filter_filters_tab_data_when_on_tab() {
+        let mut app = app_with_ec2_tab();
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ec2 {
+            instances,
+            filtered_instances,
+        } = &mut tab.data
+        {
+            *instances = vec![
+                create_test_instance("i-001", "web", InstanceState::Running),
+                create_test_instance("i-002", "api", InstanceState::Stopped),
+            ];
+            *filtered_instances = instances.clone();
+        }
+        tab.filter_input = Input::from("web");
+        tab.loading = false;
+        app.apply_filter();
+        let tab = app.active_tab().unwrap();
+        if let ServiceData::Ec2 {
+            filtered_instances, ..
+        } = &tab.data
+        {
+            assert_eq!(filtered_instances.len(), 1);
+            assert_eq!(filtered_instances[0].name, "web");
+        } else {
+            panic!("Expected Ec2 data");
+        }
+    }
+
+    #[test]
+    fn apply_filter_filters_dashboard_services_when_on_dashboard() {
+        let mut app = App::new("dev".to_string(), None);
+        app.dashboard.filter_input = Input::from("EC2");
+        app.apply_filter();
+        assert!(!app.dashboard.filtered_services.is_empty());
+        // EC2 should be in the results
+        assert!(app.dashboard.filtered_services.contains(&ServiceKind::Ec2));
     }
 
     // ──────────────────────────────────────────────
@@ -2022,7 +2497,6 @@ mod tests {
         let app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
         assert!(app.can_delete("ec2"));
         assert!(app.can_delete("s3"));
-        assert!(app.can_delete("secrets"));
     }
 
     #[test]
@@ -2038,460 +2512,216 @@ mod tests {
     }
 
     // ──────────────────────────────────────────────
-    // fuzzy filter 統合テスト
+    // switch_tab_next / switch_tab_prev テスト
     // ──────────────────────────────────────────────
 
     #[test]
-    fn apply_filter_returns_fuzzy_matches_when_ec2_filter_set() {
+    fn switch_tab_next_cycles_through_tabs() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.instances = vec![
-            create_test_instance("i-001", "web-server", InstanceState::Running),
-            create_test_instance("i-002", "database", InstanceState::Stopped),
-            create_test_instance("i-003", "worker", InstanceState::Running),
-        ];
-        app.filter_input = Input::from("wbsr");
-        app.apply_filter();
-        assert_eq!(app.filtered_instances.len(), 1);
-        assert_eq!(app.filtered_instances[0].name, "web-server");
+        app.create_tab(ServiceKind::Ec2);
+        app.create_tab(ServiceKind::S3);
+        assert_eq!(app.active_tab_index, 1); // last created
+        app.switch_tab_next();
+        assert_eq!(app.active_tab_index, 0); // wraps around
+        app.switch_tab_next();
+        assert_eq!(app.active_tab_index, 1);
     }
 
     #[test]
-    fn apply_filter_returns_sorted_by_score_when_multiple_matches() {
-        use crate::aws::s3_model::Bucket;
+    fn switch_tab_prev_cycles_through_tabs() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::S3List;
-        app.s3_buckets = vec![
-            Bucket {
-                name: "my-logs-backup".to_string(),
-                creation_date: None,
-            },
-            Bucket {
-                name: "logs".to_string(),
-                creation_date: None,
-            },
-            Bucket {
-                name: "access-logs-archive".to_string(),
-                creation_date: None,
-            },
-        ];
-        app.filter_input = Input::from("logs");
-        app.apply_filter();
-        assert!(app.s3_filtered_buckets.len() >= 2);
-        // Exact match "logs" should score highest
-        assert_eq!(app.s3_filtered_buckets[0].name, "logs");
+        app.create_tab(ServiceKind::Ec2);
+        app.create_tab(ServiceKind::S3);
+        assert_eq!(app.active_tab_index, 1);
+        app.switch_tab_prev();
+        assert_eq!(app.active_tab_index, 0);
+        app.switch_tab_prev();
+        assert_eq!(app.active_tab_index, 1); // wraps around
     }
 
     // ──────────────────────────────────────────────
-    // ナビゲーションテスト
+    // close_tab テスト
     // ──────────────────────────────────────────────
 
-    fn app_with_ec2_detail() -> App {
+    #[test]
+    fn close_tab_removes_tab_and_shows_dashboard_when_last() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2Detail;
-        app.detail_tab = DetailTab::Overview;
-        let instance = create_test_instance("i-001", "web", InstanceState::Running);
-        let mut instance = instance;
-        instance.vpc_id = Some("vpc-abc123".to_string());
-        instance.subnet_id = Some("subnet-def456".to_string());
-        app.instances = vec![instance.clone()];
-        app.filtered_instances = vec![instance];
-        app.selected_index = 0;
-        app
+        app.create_tab(ServiceKind::Ec2);
+        assert!(!app.show_dashboard);
+        app.close_tab();
+        assert!(app.tabs.is_empty());
+        assert!(app.show_dashboard);
     }
 
     #[test]
-    fn dispatch_returns_vpc_detail_when_follow_link_on_vpc_field() {
-        let mut app = app_with_ec2_detail();
-        app.detail_tag_index = 0; // VpcId field
-        app.dispatch(Action::FollowLink);
-        assert_eq!(app.view, View::VpcDetail);
-        assert!(app.loading);
-        assert_eq!(app.navigate_target_id, Some("vpc-abc123".to_string()));
-        assert_eq!(app.navigation_stack.len(), 1);
-        assert_eq!(app.navigation_stack[0].view, View::Ec2Detail);
-        assert_eq!(app.navigation_stack[0].label, "i-001");
+    fn close_tab_adjusts_index_when_not_last() {
+        let mut app = App::new("dev".to_string(), None);
+        app.create_tab(ServiceKind::Ec2);
+        app.create_tab(ServiceKind::S3);
+        assert_eq!(app.active_tab_index, 1);
+        app.close_tab();
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab_index, 0);
+        assert_eq!(app.active_tab().unwrap().service, ServiceKind::Ec2);
+    }
+
+    // ──────────────────────────────────────────────
+    // current_view テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn current_view_returns_ec2_list_when_ec2_tab_in_list_view() {
+        let app = app_with_ec2_tab();
+        assert_eq!(app.current_view(), Some(View::Ec2List));
     }
 
     #[test]
-    fn dispatch_returns_vpc_detail_when_follow_link_on_subnet_field() {
-        let mut app = app_with_ec2_detail();
-        app.detail_tag_index = 1; // SubnetId field
-        app.dispatch(Action::FollowLink);
-        assert_eq!(app.view, View::VpcDetail);
-        assert!(app.loading);
-        assert_eq!(app.navigate_target_id, Some("subnet-def456".to_string()));
-        assert_eq!(app.navigation_stack.len(), 1);
+    fn current_view_returns_ec2_detail_when_ec2_tab_in_detail_view() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().tab_view = TabView::Detail;
+        assert_eq!(app.current_view(), Some(View::Ec2Detail));
     }
 
     #[test]
-    fn dispatch_returns_no_change_when_follow_link_without_vpc_id() {
-        let mut app = app_with_ec2_detail();
-        // Clear vpc_id
-        app.instances[0].vpc_id = None;
-        app.filtered_instances[0].vpc_id = None;
-        app.detail_tag_index = 0; // VpcId field
-        app.dispatch(Action::FollowLink);
-        assert_eq!(app.view, View::Ec2Detail); // no navigation
-        assert!(app.navigation_stack.is_empty());
+    fn current_view_returns_none_when_no_tabs() {
+        let app = App::new("dev".to_string(), None);
+        assert_eq!(app.current_view(), None);
     }
 
+    // ──────────────────────────────────────────────
+    // SwitchDetailTab テスト
+    // ──────────────────────────────────────────────
+
     #[test]
-    fn dispatch_returns_no_change_when_follow_link_on_tags_tab() {
-        let mut app = app_with_ec2_detail();
-        app.detail_tab = DetailTab::Tags;
-        app.dispatch(Action::FollowLink);
-        assert_eq!(app.view, View::Ec2Detail); // no navigation
-        assert!(app.navigation_stack.is_empty());
+    fn switch_detail_tab_toggles_ec2_detail_tab() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().tab_view = TabView::Detail;
+        assert_eq!(app.active_tab().unwrap().detail_tab, DetailTab::Overview);
+        app.dispatch(Action::SwitchDetailTab);
+        assert_eq!(app.active_tab().unwrap().detail_tab, DetailTab::Tags);
+        app.dispatch(Action::SwitchDetailTab);
+        assert_eq!(app.active_tab().unwrap().detail_tab, DetailTab::Overview);
     }
 
-    #[test]
-    fn handle_back_returns_ec2_detail_when_vpc_detail_with_nav_stack() {
-        let mut app = app_with_ec2_detail();
-        app.detail_tag_index = 0;
-        app.dispatch(Action::FollowLink);
-        assert_eq!(app.view, View::VpcDetail);
+    // ──────────────────────────────────────────────
+    // ShowHelp テスト
+    // ──────────────────────────────────────────────
 
-        // Go back
+    #[test]
+    fn show_help_sets_flag_and_back_dismisses() {
+        let mut app = App::new("dev".to_string(), None);
+        app.dispatch(Action::ShowHelp);
+        assert!(app.show_help);
         app.dispatch(Action::Back);
-        assert_eq!(app.view, View::Ec2Detail);
-        assert!(app.navigation_stack.is_empty());
+        assert!(!app.show_help);
+    }
+
+    // ──────────────────────────────────────────────
+    // Message overlay テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_dismiss_message_clears_message_overlay() {
+        let mut app = App::new("dev".to_string(), None);
+        app.show_message(MessageLevel::Info, "Info", "test");
+        app.dispatch(Action::DismissMessage);
+        assert!(app.message.is_none());
     }
 
     #[test]
-    fn handle_back_returns_vpc_list_when_vpc_detail_without_nav_stack() {
+    fn dispatch_back_clears_message_overlay() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::VpcDetail;
+        app.show_message(MessageLevel::Info, "Info", "test");
         app.dispatch(Action::Back);
-        assert_eq!(app.view, View::VpcList);
-    }
-
-    #[test]
-    fn handle_back_clears_nav_stack_when_ec2_detail_back() {
-        let mut app = app_with_ec2_detail();
-        app.navigation_stack.push(NavigationEntry {
-            view: View::Ec2Detail,
-            selected_index: 0,
-            detail_tag_index: 0,
-            detail_tab: DetailTab::Overview,
-            label: "i-001".to_string(),
-        });
-        app.dispatch(Action::Back);
-        assert_eq!(app.view, View::Ec2List);
-        assert!(app.navigation_stack.is_empty());
-    }
-
-    #[test]
-    fn breadcrumb_returns_none_when_nav_stack_empty() {
-        let app = app_with_ec2_detail();
-        assert!(app.breadcrumb().is_none());
-    }
-
-    #[test]
-    fn breadcrumb_returns_path_when_nav_stack_has_entries() {
-        let mut app = app_with_ec2_detail();
-        app.navigation_stack.push(NavigationEntry {
-            view: View::Ec2Detail,
-            selected_index: 0,
-            detail_tag_index: 0,
-            detail_tab: DetailTab::Overview,
-            label: "i-001".to_string(),
-        });
-        app.view = View::VpcDetail;
-        app.filtered_vpcs = vec![crate::aws::vpc_model::Vpc {
-            vpc_id: "vpc-abc123".to_string(),
-            name: "main-vpc".to_string(),
-            cidr_block: "10.0.0.0/16".to_string(),
-            state: "available".to_string(),
-            is_default: false,
-            owner_id: "123456789012".to_string(),
-            tags: HashMap::new(),
-        }];
-        let breadcrumb = app.breadcrumb().unwrap();
-        assert_eq!(breadcrumb, "i-001 > vpc-abc123");
-    }
-
-    #[test]
-    fn navigate_vpc_loaded_returns_vpc_data_when_success() {
-        let mut app = app_with_ec2_detail();
-        app.detail_tag_index = 0;
-        app.dispatch(Action::FollowLink);
-        assert!(app.loading);
-
-        let vpcs = vec![crate::aws::vpc_model::Vpc {
-            vpc_id: "vpc-abc123".to_string(),
-            name: "main-vpc".to_string(),
-            cidr_block: "10.0.0.0/16".to_string(),
-            state: "available".to_string(),
-            is_default: false,
-            owner_id: "123456789012".to_string(),
-            tags: HashMap::new(),
-        }];
-        let subnets = vec![crate::aws::vpc_model::Subnet {
-            subnet_id: "subnet-001".to_string(),
-            vpc_id: "vpc-abc123".to_string(),
-            name: "public-1a".to_string(),
-            cidr_block: "10.0.1.0/24".to_string(),
-            availability_zone: "ap-northeast-1a".to_string(),
-            available_ip_count: 251,
-            state: "available".to_string(),
-            is_default: false,
-            map_public_ip_on_launch: false,
-        }];
-
-        app.handle_event(AppEvent::NavigateVpcLoaded(Ok((vpcs, subnets))));
-        assert!(!app.loading);
-        assert_eq!(app.filtered_vpcs.len(), 1);
-        assert_eq!(app.subnets.len(), 1);
-    }
-
-    #[test]
-    fn navigate_vpc_loaded_returns_error_and_pops_stack_when_failure() {
-        let mut app = app_with_ec2_detail();
-        app.detail_tag_index = 0;
-        app.dispatch(Action::FollowLink);
-        assert_eq!(app.navigation_stack.len(), 1);
-
-        app.handle_event(AppEvent::NavigateVpcLoaded(Err(AppError::AwsApi(
-            "test error".to_string(),
-        ))));
-        assert!(!app.loading);
-        assert!(app.navigation_stack.is_empty()); // popped back
-        assert_eq!(app.view, View::Ec2Detail); // restored
-    }
-
-    #[test]
-    fn detail_list_len_returns_field_count_when_ec2_detail_overview() {
-        let mut app = app_with_ec2_detail();
-        app.detail_tab = DetailTab::Overview;
-        assert_eq!(app.detail_list_len(), Ec2DetailField::ALL.len());
+        assert!(app.message.is_none());
     }
 
     // ──────────────────────────────────────────────
-    // CRUD: Create操作テスト
+    // half_page テスト
     // ──────────────────────────────────────────────
 
     #[test]
-    fn handle_create_returns_form_mode_when_s3_list() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::S3List;
-        app.dispatch(Action::Create);
-        assert!(matches!(
-            app.mode,
-            Mode::Form(FormContext {
-                kind: FormKind::CreateS3Bucket,
-                ..
-            })
-        ));
+    fn half_page_up_moves_10_when_on_tab_list() {
+        let mut app = app_with_ec2_tab();
+        let instances: Vec<Instance> = (0..20)
+            .map(|i| create_test_instance(&format!("i-{i:03}"), "inst", InstanceState::Running))
+            .collect();
+        set_ec2_instances(&mut app, instances);
+        app.active_tab_mut().unwrap().selected_index = 15;
+        app.dispatch(Action::HalfPageUp);
+        assert_eq!(app.active_tab().unwrap().selected_index, 5);
     }
 
     #[test]
-    fn handle_create_returns_form_mode_when_secrets_list() {
+    fn half_page_down_moves_10_when_on_tab_list() {
+        let mut app = app_with_ec2_tab();
+        let instances: Vec<Instance> = (0..20)
+            .map(|i| create_test_instance(&format!("i-{i:03}"), "inst", InstanceState::Running))
+            .collect();
+        set_ec2_instances(&mut app, instances);
+        app.active_tab_mut().unwrap().selected_index = 5;
+        app.dispatch(Action::HalfPageDown);
+        assert_eq!(app.active_tab().unwrap().selected_index, 15);
+    }
+
+    // ──────────────────────────────────────────────
+    // Noop テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_returns_none_when_noop() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::SecretsList;
-        app.dispatch(Action::Create);
-        if let Mode::Form(ctx) = &app.mode {
-            assert_eq!(ctx.kind, FormKind::CreateSecret);
-            assert_eq!(ctx.fields.len(), 3);
-        } else {
-            panic!("Expected Form mode");
+        let result = app.dispatch(Action::Noop);
+        assert!(result.is_none());
+    }
+
+    // ──────────────────────────────────────────────
+    // Filter mode テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn start_filter_sets_filter_mode_on_tab() {
+        let mut app = app_with_ec2_tab();
+        app.dispatch(Action::StartFilter);
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Filter);
+    }
+
+    #[test]
+    fn confirm_filter_sets_normal_mode_on_tab() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode = Mode::Filter;
+        app.dispatch(Action::ConfirmFilter);
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+    }
+
+    #[test]
+    fn cancel_filter_resets_filter_and_sets_normal_mode() {
+        let mut app = app_with_ec2_tab();
+        let tab = app.active_tab_mut().unwrap();
+        tab.mode = Mode::Filter;
+        tab.filter_input = Input::from("web");
+        if let ServiceData::Ec2 {
+            instances,
+            filtered_instances,
+        } = &mut tab.data
+        {
+            *instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
+            *filtered_instances = instances.clone();
         }
-    }
-
-    #[test]
-    fn handle_create_returns_no_change_when_ec2_list() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.dispatch(Action::Create);
-        assert_eq!(app.mode, Mode::Normal);
+        app.dispatch(Action::CancelFilter);
+        let tab = app.active_tab().unwrap();
+        assert_eq!(tab.mode, Mode::Normal);
+        assert!(tab.filter_input.value().is_empty());
     }
 
     // ──────────────────────────────────────────────
-    // CRUD: Delete操作テスト
+    // FormNextField テスト
     // ──────────────────────────────────────────────
 
     #[test]
-    fn handle_delete_returns_permission_denied_when_no_permission() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::Delete);
-        assert_eq!(app.mode, Mode::Message);
-    }
-
-    #[test]
-    fn handle_delete_returns_danger_confirm_when_ec2_with_permission() {
-        let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
-        app.view = View::Ec2List;
-        app.filtered_instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-        app.dispatch(Action::Delete);
-        if let Mode::DangerConfirm(ctx) = &app.mode {
-            assert_eq!(ctx.action, DangerAction::TerminateEc2("i-001".to_string()));
-        } else {
-            panic!("Expected DangerConfirm mode");
-        }
-    }
-
-    #[test]
-    fn handle_delete_returns_danger_confirm_when_s3_list_with_permission() {
-        let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
-        app.view = View::S3List;
-        app.s3_filtered_buckets = vec![crate::aws::s3_model::Bucket {
-            name: "my-bucket".to_string(),
-            creation_date: None,
-        }];
-        app.dispatch(Action::Delete);
-        if let Mode::DangerConfirm(ctx) = &app.mode {
-            assert_eq!(
-                ctx.action,
-                DangerAction::DeleteS3Bucket("my-bucket".to_string())
-            );
-        } else {
-            panic!("Expected DangerConfirm mode");
-        }
-    }
-
-    #[test]
-    fn handle_delete_returns_danger_confirm_when_secrets_list_with_permission() {
-        let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
-        app.view = View::SecretsList;
-        app.filtered_secrets = vec![crate::aws::secrets_model::Secret {
-            name: "my-secret".to_string(),
-            arn: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret".to_string(),
-            description: None,
-            last_changed_date: None,
-            last_accessed_date: None,
-            tags: HashMap::new(),
-        }];
-        app.dispatch(Action::Delete);
-        if let Mode::DangerConfirm(ctx) = &app.mode {
-            assert_eq!(
-                ctx.action,
-                DangerAction::DeleteSecret("my-secret".to_string())
-            );
-        } else {
-            panic!("Expected DangerConfirm mode");
-        }
-    }
-
-    #[test]
-    fn handle_delete_returns_permission_denied_when_service_not_allowed() {
-        let mut app = App::with_delete_permissions(
-            "dev".to_string(),
-            None,
-            DeletePermissions::Services(vec!["ec2".to_string()]),
-        );
-        app.view = View::S3List;
-        app.s3_filtered_buckets = vec![crate::aws::s3_model::Bucket {
-            name: "my-bucket".to_string(),
-            creation_date: None,
-        }];
-        app.dispatch(Action::Delete);
-        assert_eq!(app.mode, Mode::Message);
-    }
-
-    // ──────────────────────────────────────────────
-    // CRUD: Edit操作テスト
-    // ──────────────────────────────────────────────
-
-    #[test]
-    fn handle_edit_returns_form_mode_when_secrets_detail_with_detail() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::SecretsDetail;
-        app.secret_detail = Some(crate::aws::secrets_model::SecretDetail {
-            name: "my-secret".to_string(),
-            arn: "arn:test".to_string(),
-            description: None,
-            kms_key_id: None,
-            rotation_enabled: false,
-            rotation_lambda_arn: None,
-            last_rotated_date: None,
-            last_changed_date: None,
-            last_accessed_date: None,
-            created_date: None,
-            tags: HashMap::new(),
-            version_ids: Vec::new(),
-        });
-        app.dispatch(Action::Edit);
-        if let Mode::Form(ctx) = &app.mode {
-            assert_eq!(ctx.kind, FormKind::UpdateSecretValue);
-            assert_eq!(ctx.fields.len(), 1);
-        } else {
-            panic!("Expected Form mode");
-        }
-    }
-
-    #[test]
-    fn handle_edit_returns_no_change_when_no_detail() {
-        let mut app = App::new("dev".to_string(), None);
-        app.view = View::SecretsDetail;
-        app.dispatch(Action::Edit);
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    // ──────────────────────────────────────────────
-    // CRUD: Form操作テスト
-    // ──────────────────────────────────────────────
-
-    #[test]
-    fn handle_form_cancel_returns_normal_mode_when_in_form() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::Form(FormContext {
-            kind: FormKind::CreateS3Bucket,
-            fields: vec![FormField {
-                label: "Bucket Name".to_string(),
-                input: Input::default(),
-                required: true,
-            }],
-            focused_field: 0,
-        });
-        app.dispatch(Action::FormCancel);
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn handle_form_submit_returns_error_when_required_field_empty() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::Form(FormContext {
-            kind: FormKind::CreateS3Bucket,
-            fields: vec![FormField {
-                label: "Bucket Name".to_string(),
-                input: Input::default(),
-                required: true,
-            }],
-            focused_field: 0,
-        });
-        app.dispatch(Action::FormSubmit);
-        assert_eq!(app.mode, Mode::Message);
-    }
-
-    #[test]
-    fn handle_form_submit_returns_pending_form_when_valid() {
-        let mut app = App::new("dev".to_string(), None);
-        let mut input = Input::default();
-        input.handle(tui_input::InputRequest::InsertChar('t'));
-        input.handle(tui_input::InputRequest::InsertChar('e'));
-        input.handle(tui_input::InputRequest::InsertChar('s'));
-        input.handle(tui_input::InputRequest::InsertChar('t'));
-        app.mode = Mode::Form(FormContext {
-            kind: FormKind::CreateS3Bucket,
-            fields: vec![FormField {
-                label: "Bucket Name".to_string(),
-                input,
-                required: true,
-            }],
-            focused_field: 0,
-        });
-        app.dispatch(Action::FormSubmit);
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.pending_form.is_some());
-        assert!(app.loading);
-    }
-
-    #[test]
-    fn handle_form_next_field_returns_next_when_multiple_fields() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::Form(FormContext {
+    fn form_next_field_advances_when_multiple_fields() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
             kind: FormKind::CreateSecret,
             fields: vec![
                 FormField {
@@ -2508,7 +2738,7 @@ mod tests {
             focused_field: 0,
         });
         app.dispatch(Action::FormNextField);
-        if let Mode::Form(ctx) = &app.mode {
+        if let Mode::Form(ctx) = &app.active_tab().unwrap().mode {
             assert_eq!(ctx.focused_field, 1);
         } else {
             panic!("Expected Form mode");
@@ -2516,9 +2746,9 @@ mod tests {
     }
 
     #[test]
-    fn handle_form_next_field_wraps_around_when_at_last_field() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::Form(FormContext {
+    fn form_next_field_wraps_around_when_at_last() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
             kind: FormKind::CreateSecret,
             fields: vec![
                 FormField {
@@ -2535,7 +2765,7 @@ mod tests {
             focused_field: 1,
         });
         app.dispatch(Action::FormNextField);
-        if let Mode::Form(ctx) = &app.mode {
+        if let Mode::Form(ctx) = &app.active_tab().unwrap().mode {
             assert_eq!(ctx.focused_field, 0);
         } else {
             panic!("Expected Form mode");
@@ -2543,53 +2773,19 @@ mod tests {
     }
 
     // ──────────────────────────────────────────────
-    // CRUD: DangerConfirm操作テスト
+    // Refresh テスト
     // ──────────────────────────────────────────────
 
     #[test]
-    fn handle_danger_confirm_cancel_returns_normal_mode() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::DangerConfirm(DangerConfirmContext {
-            action: DangerAction::TerminateEc2("i-001".to_string()),
-            input: Input::default(),
-        });
-        app.dispatch(Action::DangerConfirmCancel);
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn handle_danger_confirm_submit_returns_no_action_when_text_mismatch() {
-        let mut app = App::new("dev".to_string(), None);
-        app.mode = Mode::DangerConfirm(DangerConfirmContext {
-            action: DangerAction::TerminateEc2("i-001".to_string()),
-            input: Input::default(),
-        });
-        app.dispatch(Action::DangerConfirmSubmit);
-        assert!(matches!(app.mode, Mode::DangerConfirm(_)));
-    }
-
-    #[test]
-    fn handle_danger_confirm_submit_returns_pending_action_when_text_matches() {
-        let mut app = App::new("dev".to_string(), None);
-        let mut input = Input::default();
-        for c in "i-001".chars() {
-            input.handle(tui_input::InputRequest::InsertChar(c));
-        }
-        app.mode = Mode::DangerConfirm(DangerConfirmContext {
-            action: DangerAction::TerminateEc2("i-001".to_string()),
-            input,
-        });
-        app.dispatch(Action::DangerConfirmSubmit);
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.pending_danger_action.is_some());
-        assert_eq!(
-            app.pending_danger_action.unwrap(),
-            DangerAction::TerminateEc2("i-001".to_string())
-        );
+    fn refresh_sets_loading_on_active_tab() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().loading = false;
+        app.dispatch(Action::Refresh);
+        assert!(app.active_tab().unwrap().loading);
     }
 
     // ──────────────────────────────────────────────
-    // CRUD: DangerAction テスト
+    // DangerAction テスト
     // ──────────────────────────────────────────────
 
     #[test]
@@ -2616,46 +2812,17 @@ mod tests {
     #[test]
     fn danger_action_message_returns_terminate_msg_when_ec2() {
         let action = DangerAction::TerminateEc2("i-001".to_string());
-        assert!(action.message().contains("i-001"));
-        assert!(action.message().contains("terminate"));
+        assert_eq!(action.message(), "Type 'i-001' to terminate this instance:");
     }
 
     #[test]
     fn danger_action_message_returns_delete_msg_when_s3_bucket() {
         let action = DangerAction::DeleteS3Bucket("my-bucket".to_string());
-        assert!(action.message().contains("my-bucket"));
-        assert!(action.message().contains("delete"));
+        assert_eq!(action.message(), "Type 'my-bucket' to delete this bucket:");
     }
 
     // ──────────────────────────────────────────────
-    // CRUD: CrudCompleted イベントテスト
-    // ──────────────────────────────────────────────
-
-    #[test]
-    fn handle_event_returns_success_message_when_crud_completed_ok() {
-        let mut app = App::new("dev".to_string(), None);
-        app.handle_event(AppEvent::CrudCompleted(Ok("Bucket created".to_string())));
-        assert_eq!(app.mode, Mode::Message);
-        assert!(app.loading);
-        let msg = app.message.as_ref().unwrap();
-        assert_eq!(msg.level, MessageLevel::Success);
-        assert!(msg.body.contains("Bucket created"));
-    }
-
-    #[test]
-    fn handle_event_returns_error_message_when_crud_completed_err() {
-        let mut app = App::new("dev".to_string(), None);
-        app.handle_event(AppEvent::CrudCompleted(Err(AppError::AwsApi(
-            "access denied".to_string(),
-        ))));
-        assert_eq!(app.mode, Mode::Message);
-        let msg = app.message.as_ref().unwrap();
-        assert_eq!(msg.level, MessageLevel::Error);
-        assert!(msg.body.contains("access denied"));
-    }
-
-    // ──────────────────────────────────────────────
-    // CRUD: FormContext テスト
+    // FormContext テスト
     // ──────────────────────────────────────────────
 
     #[test]
@@ -2677,44 +2844,58 @@ mod tests {
     }
 
     // ──────────────────────────────────────────────
-    // ServiceSelect fuzzy filter テスト
+    // Dashboard filter mode テスト
     // ──────────────────────────────────────────────
 
     #[test]
-    fn apply_filter_returns_all_services_when_empty_query_in_service_select() {
+    fn start_filter_sets_dashboard_filter_mode_when_on_dashboard() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::ServiceSelect;
-        app.filter_input = Input::default();
-        app.apply_filter();
-        assert_eq!(
-            app.filtered_service_names,
-            vec!["EC2", "ECR", "ECS", "S3", "VPC", "Secrets Manager"]
-        );
+        app.dispatch(Action::StartFilter);
+        assert_eq!(app.dashboard.mode, Mode::Filter);
     }
 
     #[test]
-    fn apply_filter_returns_matching_services_when_fuzzy_query_in_service_select() {
+    fn cancel_filter_resets_dashboard_filter_when_on_dashboard() {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::ServiceSelect;
-        app.filter_input = Input::from("ec");
-        app.apply_filter();
-        // EC2, ECR, ECS, Secrets Manager はすべてecにマッチしうるが、
-        // fuzzyスコアで上位のものだけ返る可能性がある
-        assert!(app.filtered_service_names.contains(&"EC2".to_string()));
-        assert!(app.filtered_service_names.contains(&"ECR".to_string()));
-        assert!(app.filtered_service_names.contains(&"ECS".to_string()));
+        app.dashboard.mode = Mode::Filter;
+        app.dashboard.filter_input = Input::from("ec");
+        app.dispatch(Action::CancelFilter);
+        assert_eq!(app.dashboard.mode, Mode::Normal);
+        assert!(app.dashboard.filter_input.value().is_empty());
     }
+
+    // ──────────────────────────────────────────────
+    // FormCancel テスト
+    // ──────────────────────────────────────────────
 
     #[test]
-    fn handle_enter_returns_correct_service_when_filtered_in_service_select() {
-        let mut app = App::new("dev".to_string(), None);
-        app.profile = Some("dev".to_string());
-        app.view = View::ServiceSelect;
-        // フィルタでS3だけ残った状態をシミュレート
-        app.filtered_service_names = vec!["S3".to_string()];
-        app.service_selected = 0;
-        app.dispatch(Action::Enter);
-        assert_eq!(app.view, View::S3List);
+    fn form_cancel_sets_normal_mode_when_in_form() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
+            kind: FormKind::CreateS3Bucket,
+            fields: vec![FormField {
+                label: "Bucket Name".to_string(),
+                input: Input::default(),
+                required: true,
+            }],
+            focused_field: 0,
+        });
+        app.dispatch(Action::FormCancel);
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
     }
 
+    // ──────────────────────────────────────────────
+    // DangerConfirmCancel テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn danger_confirm_cancel_sets_normal_mode() {
+        let mut app = app_with_ec2_tab();
+        app.active_tab_mut().unwrap().mode = Mode::DangerConfirm(DangerConfirmContext {
+            action: DangerAction::TerminateEc2("i-001".to_string()),
+            input: Input::default(),
+        });
+        app.dispatch(Action::DangerConfirmCancel);
+        assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+    }
 }

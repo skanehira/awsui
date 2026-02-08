@@ -146,8 +146,9 @@ mod tests {
             sso_session: None,
         };
         let path = cache_file_path(&profile);
-        let expected_hash =
-            sha1_smol::Sha1::from("https://my-sso.awsapps.com/start").digest().to_string();
+        let expected_hash = sha1_smol::Sha1::from("https://my-sso.awsapps.com/start")
+            .digest()
+            .to_string();
         assert!(path.ends_with(format!("{}.json", expected_hash)));
     }
 

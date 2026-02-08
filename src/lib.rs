@@ -6,5 +6,8 @@ pub mod config;
 pub mod error;
 pub mod event;
 pub mod fuzzy;
+pub mod recent;
+pub mod service;
 pub mod sso;
+pub mod tab;
 pub mod tui;

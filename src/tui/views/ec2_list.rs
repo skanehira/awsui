@@ -34,10 +34,16 @@ pub fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
     let inner = outer_block.inner(outer_chunks[0]);
     frame.render_widget(outer_block, outer_chunks[0]);
 
+    // アクティブタブから状態を取得
+    let tab = app.active_tab();
+    let loading = tab.map(|t| t.loading).unwrap_or(false);
+    let mode = tab.map(|t| &t.mode).unwrap_or(&crate::app::Mode::Normal);
+    let filter_value = tab.map(|t| t.filter_input.value()).unwrap_or("");
+
     // メインコンテンツ
-    if app.loading {
-        let loading = Loading::new("Loading instances...", spinner_tick);
-        frame.render_widget(loading, inner);
+    if loading {
+        let loading_widget = Loading::new("Loading instances...", spinner_tick);
+        frame.render_widget(loading_widget, inner);
     } else {
         render_table(frame, app, inner);
     }
@@ -46,8 +52,8 @@ pub fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
     render_footer(
         frame,
         outer_chunks[1],
-        &app.mode,
-        app.filter_input.value(),
+        mode,
+        filter_value,
         "j/k:move Enter:detail S:start/stop R:reboot /:filter ?:help",
     );
 }
@@ -72,11 +78,26 @@ fn build_right_title(app: &App) -> Option<String> {
 
 /// テーブルを描画
 fn render_table(frame: &mut Frame, app: &App, area: Rect) {
+    let tab = app.active_tab();
+    let selected_index = tab.map(|t| t.selected_index).unwrap_or(0);
+
+    let instances: Vec<&Instance> = tab
+        .and_then(|t| {
+            if let crate::tab::ServiceData::Ec2 {
+                filtered_instances, ..
+            } = &t.data
+            {
+                Some(filtered_instances.iter().collect())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
     let headers =
         Row::new(vec!["Instance ID", "Name", "State", "Type", "AZ"]).style(theme::header());
 
-    let rows: Vec<Row> = app
-        .filtered_instances
+    let rows: Vec<Row> = instances
         .iter()
         .map(|instance| instance_to_row(instance))
         .collect();
@@ -90,7 +111,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
     ];
 
     let table = SelectableTable::new(headers, rows, widths);
-    let widget = SelectableTableWidget::new(table, app.selected_index);
+    let widget = SelectableTableWidget::new(table, selected_index);
     frame.render_widget(widget, area);
 }
 
@@ -123,7 +144,9 @@ fn state_style(state: &InstanceState) -> ratatui::style::Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{Mode, View};
+    use crate::app::Mode;
+    use crate::service::ServiceKind;
+    use crate::tab::ServiceData;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::collections::HashMap;
@@ -163,11 +186,16 @@ mod tests {
 
     fn app_with_instances(instances: Vec<Instance>) -> App {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2List;
         app.profile = Some("dev-account".to_string());
         app.region = Some("ap-northeast-1".to_string());
-        app.instances = instances.clone();
-        app.filtered_instances = instances;
+        app.create_tab(ServiceKind::Ec2);
+        if let Some(tab) = app.active_tab_mut() {
+            tab.loading = false;
+            tab.data = ServiceData::Ec2 {
+                instances: instances.clone(),
+                filtered_instances: instances,
+            };
+        }
         app
     }
 
@@ -237,7 +265,9 @@ mod tests {
     #[test]
     fn render_returns_loading_when_loading_state() {
         let mut app = app_with_instances(vec![]);
-        app.loading = true;
+        if let Some(tab) = app.active_tab_mut() {
+            tab.loading = true;
+        }
         let backend = TestBackend::new(60, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -252,8 +282,10 @@ mod tests {
         use tui_input::Input;
         let instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
         let mut app = app_with_instances(instances);
-        app.mode = Mode::Filter;
-        app.filter_input = Input::from("web");
+        if let Some(tab) = app.active_tab_mut() {
+            tab.mode = Mode::Filter;
+            tab.filter_input = Input::from("web");
+        }
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 

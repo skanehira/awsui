@@ -1,0 +1,18 @@
+---
+source: src/tui/components/service_picker.rs
+expression: buffer_to_string(&terminal)
+---
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+            ┌ Open Service ────────────────────┐            
+            │/                                 │            
+            │▶ Elastic Compute Cloud (EC2)     │            
+            │  Elastic Container Registry (ECR)│            
+            │  Elastic Container Service (ECS) │            
+            │  Simple Storage Service (S3)     │            
+            │  Virtual Private Cloud (VPC)     │            
+            │  Secrets Manager                 │            
+            └──────────────────────────────────┘

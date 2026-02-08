@@ -39,5 +39,16 @@ pub enum Action {
     DangerConfirmSubmit,
     DangerConfirmCancel,
     DangerConfirmHandleInput(InputRequest),
+    /// タブ操作
+    NextTab,
+    PrevTab,
+    CloseTab,
+    NewTab,
+    /// サービスピッカー操作
+    PickerConfirm,
+    PickerCancel,
+    PickerMoveUp,
+    PickerMoveDown,
+    PickerHandleInput(InputRequest),
     Noop,
 }

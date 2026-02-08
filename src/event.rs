@@ -5,10 +5,11 @@ use crate::aws::s3_model::{Bucket, S3Object};
 use crate::aws::secrets_model::{Secret, SecretDetail};
 use crate::aws::vpc_model::{Subnet, Vpc};
 use crate::error::AppError;
+use crate::tab::TabId;
 
-/// バックグラウンドタスクからUIスレッドへ送信されるイベント。
+/// タブ固有のイベント
 #[derive(Debug)]
-pub enum AppEvent {
+pub enum TabEvent {
     /// EC2インスタンス一覧の読み込み完了
     InstancesLoaded(Result<Vec<Instance>, AppError>),
 
@@ -47,7 +48,14 @@ pub enum AppEvent {
 
     /// ナビゲーションリンク先のVPCデータ読み込み完了
     NavigateVpcLoaded(Result<(Vec<Vpc>, Vec<Subnet>), AppError>),
+}
+
+/// バックグラウンドタスクからUIスレッドへ送信されるイベント。
+#[derive(Debug)]
+pub enum AppEvent {
+    /// タブ固有のイベント
+    TabEvent(TabId, TabEvent),
 
     /// CRUD操作の完了（汎用：成功メッセージまたはエラー）
-    CrudCompleted(Result<String, AppError>),
+    CrudCompleted(TabId, Result<String, AppError>),
 }

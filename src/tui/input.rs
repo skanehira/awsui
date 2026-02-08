@@ -7,35 +7,78 @@ use crate::app::{App, Mode, View};
 /// キーイベントをActionに変換する。
 /// Appの現在のmode/viewに応じて適切なActionを返す。
 pub fn handle_key(app: &App, key: KeyEvent) -> Action {
-    // モーダルが優先
-    match &app.mode {
+    // グローバルオーバーレイが優先
+    if app.message.is_some() {
+        return handle_message_key(key);
+    }
+    if app.show_help {
+        return handle_help_key(key);
+    }
+
+    // サービスピッカー表示中
+    if app.service_picker.is_some() {
+        return handle_picker_key(key);
+    }
+
+    // ダッシュボード表示中
+    if app.show_dashboard {
+        return match app.dashboard.mode {
+            Mode::Filter => handle_filter_key(key),
+            _ => handle_service_select_key(key),
+        };
+    }
+
+    // アクティブタブのモード/ビュー
+    let Some(tab) = app.active_tab() else {
+        return Action::Noop;
+    };
+
+    // タブ固有モーダルが優先
+    match &tab.mode {
         Mode::Confirm(_) => return handle_confirm_key(key),
-        Mode::Message => return handle_message_key(key),
-        Mode::Help => return handle_help_key(key),
         Mode::Form(_) => return handle_form_key(key),
         Mode::DangerConfirm(_) => return handle_danger_confirm_key(key),
         _ => {}
     }
 
+    // タブ操作キー（Normalモード時のみ）
+    if tab.mode == Mode::Normal {
+        match key.code {
+            KeyCode::Tab if key.modifiers.is_empty() => return Action::NextTab,
+            KeyCode::BackTab => return Action::PrevTab,
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Action::CloseTab;
+            }
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Action::NewTab;
+            }
+            _ => {}
+        }
+    }
+
     // View別のハンドリング
-    match app.view {
-        View::ServiceSelect => match app.mode {
+    let Some(view) = app.current_view() else {
+        return Action::Noop;
+    };
+    let mode = &tab.mode;
+    match view {
+        View::ServiceSelect => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_service_select_key(key),
         },
-        View::Ec2List => match app.mode {
+        View::Ec2List => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_ec2_list_key(key),
         },
-        View::EcrList | View::EcsList | View::VpcList => match app.mode {
+        View::EcrList | View::EcsList | View::VpcList => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_generic_list_key(key),
         },
-        View::S3List => match app.mode {
+        View::S3List => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_s3_list_key(key),
         },
-        View::SecretsList => match app.mode {
+        View::SecretsList => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_secrets_list_key(key),
         },
@@ -71,10 +114,31 @@ fn handle_help_key(key: KeyEvent) -> Action {
     }
 }
 
+/// サービスピッカーのキー処理
+fn handle_picker_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Enter => Action::PickerConfirm,
+        KeyCode::Esc => Action::PickerCancel,
+        KeyCode::Char('j') | KeyCode::Down => Action::PickerMoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::PickerMoveUp,
+        _ => {
+            if let Some(req) = to_input_request(&Event::Key(key)) {
+                Action::PickerHandleInput(req)
+            } else {
+                Action::Noop
+            }
+        }
+    }
+}
+
 /// サービス選択画面のキー処理
 fn handle_service_select_key(key: KeyEvent) -> Action {
     if is_quit_key(&key) {
         return Action::Quit;
+    }
+    // ダッシュボードでも Ctrl+t でピッカーを開ける
+    if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::NewTab;
     }
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
@@ -203,7 +267,7 @@ fn handle_ec2_detail_key(key: KeyEvent) -> Action {
         return Action::Quit;
     }
     match key.code {
-        KeyCode::Tab => Action::SwitchDetailTab,
+        KeyCode::Char(']') => Action::SwitchDetailTab,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Enter => Action::FollowLink,
@@ -257,7 +321,7 @@ fn handle_secrets_detail_key(key: KeyEvent) -> Action {
         return Action::Quit;
     }
     match key.code {
-        KeyCode::Tab => Action::SwitchDetailTab,
+        KeyCode::Char(']') => Action::SwitchDetailTab,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Char('y') => Action::CopyId,
@@ -308,7 +372,9 @@ fn is_quit_key(key: &KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::ConfirmAction;
+    use crate::app::{ConfirmAction, Message, MessageLevel};
+    use crate::service::ServiceKind;
+    use crate::tab::TabView;
     use rstest::rstest;
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -323,15 +389,63 @@ mod tests {
         key(KeyCode::Char(c))
     }
 
+    /// ViewからServiceKindとTabViewに変換
+    fn view_to_service(view: &View) -> (ServiceKind, TabView) {
+        match view {
+            View::Ec2List => (ServiceKind::Ec2, TabView::List),
+            View::Ec2Detail => (ServiceKind::Ec2, TabView::Detail),
+            View::EcrList => (ServiceKind::Ecr, TabView::List),
+            View::EcrDetail => (ServiceKind::Ecr, TabView::Detail),
+            View::EcsList => (ServiceKind::Ecs, TabView::List),
+            View::EcsDetail => (ServiceKind::Ecs, TabView::Detail),
+            View::S3List => (ServiceKind::S3, TabView::List),
+            View::S3Detail => (ServiceKind::S3, TabView::Detail),
+            View::VpcList => (ServiceKind::Vpc, TabView::List),
+            View::VpcDetail => (ServiceKind::Vpc, TabView::Detail),
+            View::SecretsList => (ServiceKind::SecretsManager, TabView::List),
+            View::SecretsDetail => (ServiceKind::SecretsManager, TabView::Detail),
+            View::ServiceSelect => unreachable!("ServiceSelect has no tab"),
+        }
+    }
+
     fn app_with_view(view: View) -> App {
         let mut app = App::new("dev".to_string(), None);
-        app.view = view;
+        if view == View::ServiceSelect {
+            // show_dashboard is true by default
+            return app;
+        }
+        let (service, tab_view) = view_to_service(&view);
+        app.create_tab(service);
+        if tab_view == TabView::Detail {
+            if let Some(tab) = app.active_tab_mut() {
+                tab.tab_view = TabView::Detail;
+            }
+        }
         app
     }
 
     fn app_with_mode(view: View, mode: Mode) -> App {
+        let is_service_select = view == View::ServiceSelect;
         let mut app = app_with_view(view);
-        app.mode = mode;
+        match mode {
+            Mode::Message => {
+                app.message = Some(Message {
+                    level: MessageLevel::Info,
+                    title: "Test".to_string(),
+                    body: "Test message".to_string(),
+                });
+            }
+            Mode::Help => {
+                app.show_help = true;
+            }
+            _ => {
+                if is_service_select {
+                    app.dashboard.mode = mode;
+                } else if let Some(tab) = app.active_tab_mut() {
+                    tab.mode = mode;
+                }
+            }
+        }
         app
     }
 
@@ -454,7 +568,7 @@ mod tests {
     // ──────────────────────────────────────────────
 
     #[rstest]
-    #[case(key(KeyCode::Tab), Action::SwitchDetailTab)]
+    #[case(key_char(']'), Action::SwitchDetailTab)]
     #[case(key(KeyCode::Enter), Action::FollowLink)]
     #[case(key_char('j'), Action::MoveDown)]
     #[case(key(KeyCode::Down), Action::MoveDown)]
@@ -498,7 +612,7 @@ mod tests {
     // ──────────────────────────────────────────────
 
     #[rstest]
-    #[case(key(KeyCode::Tab), Action::SwitchDetailTab)]
+    #[case(key_char(']'), Action::SwitchDetailTab)]
     #[case(key_char('j'), Action::MoveDown)]
     #[case(key_char('k'), Action::MoveUp)]
     #[case(key_char('y'), Action::CopyId)]
@@ -815,5 +929,88 @@ mod tests {
         let app = app_with_mode(View::ServiceSelect, Mode::Filter);
         let action = handle_key(&app, key_char('s'));
         assert!(matches!(action, Action::FilterHandleInput(_)));
+    }
+
+    // ──────────────────────────────────────────────
+    // タブ操作テスト
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn handle_key_returns_next_tab_when_tab_key_in_normal_mode() {
+        let app = app_with_view(View::Ec2List);
+        assert_eq!(handle_key(&app, key(KeyCode::Tab)), Action::NextTab);
+    }
+
+    #[test]
+    fn handle_key_returns_prev_tab_when_backtab_in_normal_mode() {
+        let app = app_with_view(View::Ec2List);
+        assert_eq!(handle_key(&app, key(KeyCode::BackTab)), Action::PrevTab);
+    }
+
+    #[test]
+    fn handle_key_returns_close_tab_when_ctrl_w_in_normal_mode() {
+        let app = app_with_view(View::Ec2List);
+        assert_eq!(
+            handle_key(
+                &app,
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)
+            ),
+            Action::CloseTab
+        );
+    }
+
+    #[test]
+    fn handle_key_returns_new_tab_when_ctrl_t_in_normal_mode() {
+        let app = app_with_view(View::Ec2List);
+        assert_eq!(
+            handle_key(
+                &app,
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL)
+            ),
+            Action::NewTab
+        );
+    }
+
+    #[test]
+    fn handle_key_returns_noop_when_tab_key_in_filter_mode() {
+        let app = app_with_mode(View::Ec2List, Mode::Filter);
+        // Filterモードでは Tab はタブ操作にならない
+        assert_eq!(handle_key(&app, key(KeyCode::Tab)), Action::Noop);
+    }
+
+    // ──────────────────────────────────────────────
+    // サービスピッカーテスト
+    // ──────────────────────────────────────────────
+
+    fn app_with_picker() -> App {
+        let mut app = app_with_view(View::Ec2List);
+        app.dispatch(Action::NewTab); // ピッカーを開く
+        app
+    }
+
+    #[test]
+    fn handle_key_returns_picker_confirm_when_enter_in_picker() {
+        let app = app_with_picker();
+        assert!(app.service_picker.is_some());
+        assert_eq!(handle_key(&app, key(KeyCode::Enter)), Action::PickerConfirm);
+    }
+
+    #[test]
+    fn handle_key_returns_picker_cancel_when_esc_in_picker() {
+        let app = app_with_picker();
+        assert_eq!(handle_key(&app, key(KeyCode::Esc)), Action::PickerCancel);
+    }
+
+    #[test]
+    fn handle_key_returns_picker_move_down_when_j_in_picker() {
+        let app = app_with_picker();
+        assert_eq!(handle_key(&app, key_char('j')), Action::PickerMoveDown);
+    }
+
+    #[test]
+    fn handle_key_returns_picker_handle_input_when_char_in_picker() {
+        let app = app_with_picker();
+        let action = handle_key(&app, key_char('s'));
+        assert!(matches!(action, Action::PickerHandleInput(_)));
     }
 }

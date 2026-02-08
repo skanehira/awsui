@@ -31,7 +31,7 @@ impl<'a> HelpPopup<'a> {
                 Line::from("    S          Start/Stop instance"),
                 Line::from("    R          Reboot instance"),
                 Line::from("    y          Copy ID"),
-                Line::from("    Tab        Switch tab"),
+                Line::from("    ]          Switch tab"),
                 Line::from("    Enter      Follow link"),
             ],
             View::S3List => vec![
@@ -55,7 +55,7 @@ impl<'a> HelpPopup<'a> {
             View::SecretsDetail => vec![
                 Line::from("    e          Edit secret value"),
                 Line::from("    y          Copy ID"),
-                Line::from("    Tab        Switch tab"),
+                Line::from("    ]          Switch tab"),
             ],
             View::EcrList | View::EcsList | View::VpcList => vec![
                 Line::from("    r          Refresh list"),
@@ -73,8 +73,8 @@ impl<'a> HelpPopup<'a> {
 impl<'a> Widget for HelpPopup<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let action_lines = self.action_lines();
-        // Navigation(7) + Actions(2+N) + General(6) + borders(2)
-        let height = 17 + action_lines.len() as u16;
+        // Navigation(7) + Actions(2+N) + Tabs(6) + General(6) + borders(2)
+        let height = 23 + action_lines.len() as u16;
         let popup = centered_rect(70, height, area);
         Clear.render(popup, buf);
 
@@ -101,6 +101,13 @@ impl<'a> Widget for HelpPopup<'a> {
             sections.push(Line::from(Span::styled("  Actions", theme::header())));
             sections.extend(action_lines);
         }
+
+        sections.push(Line::from(""));
+        sections.push(Line::from(Span::styled("  Tabs", theme::header())));
+        sections.push(Line::from("    Tab        Next tab"));
+        sections.push(Line::from("    Shift+Tab  Previous tab"));
+        sections.push(Line::from("    Ctrl+t     New tab"));
+        sections.push(Line::from("    Ctrl+w     Close tab"));
 
         sections.push(Line::from(""));
         sections.push(Line::from(Span::styled("  General", theme::header())));
@@ -162,14 +169,14 @@ mod tests {
         assert!(content.contains("Filter"));
     }
 
-    // EC2 Detail: S(Start/Stop), R(Reboot), y, Tab, Enter(follow-link)
+    // EC2 Detail: S(Start/Stop), R(Reboot), y, ](Switch tab), Enter(follow-link)
     #[test]
     fn help_popup_render_returns_ec2_detail_actions_when_ec2_detail() {
         let content = render_help(&View::Ec2Detail);
         assert!(content.contains("Start/Stop"));
         assert!(content.contains("Reboot"));
         assert!(content.contains("Copy"));
-        assert!(content.contains("Tab"));
+        assert!(content.contains("]"));
         assert!(content.contains("Follow link"));
         // リストのみのアクションは表示しない
         assert!(!content.contains("Filter"));
@@ -201,13 +208,13 @@ mod tests {
         assert!(!content.contains("Reboot"));
     }
 
-    // Secrets Detail: e(Edit), y, Tab
+    // Secrets Detail: e(Edit), y, ](Switch tab)
     #[test]
     fn help_popup_render_returns_secrets_detail_actions_when_secrets_detail() {
         let content = render_help(&View::SecretsDetail);
         assert!(content.contains("Edit"));
         assert!(content.contains("Copy"));
-        assert!(content.contains("Tab"));
+        assert!(content.contains("]"));
         assert!(!content.contains("Start/Stop"));
         assert!(!content.contains("Filter"));
     }

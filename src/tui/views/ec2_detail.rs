@@ -43,21 +43,27 @@ pub fn render(frame: &mut Frame, app: &App) {
     ])
     .split(inner);
 
+    // アクティブタブからdetail_tab/detail_tag_indexを取得
+    let (detail_tab, detail_tag_index) = app
+        .active_tab()
+        .map(|t| (t.detail_tab.clone(), t.detail_tag_index))
+        .unwrap_or((DetailTab::Overview, 0));
+
     // タブバー
-    render_tab_bar(frame, &app.detail_tab, inner_chunks[0]);
+    render_tab_bar(frame, &detail_tab, inner_chunks[0]);
 
     // コンテンツ
     if let Some(instance) = app.selected_instance() {
-        match app.detail_tab {
+        match detail_tab {
             DetailTab::Overview => {
-                render_overview(frame, instance, app.detail_tag_index, inner_chunks[1]);
+                render_overview(frame, instance, detail_tag_index, inner_chunks[1]);
             }
-            DetailTab::Tags => render_tags(frame, instance, app.detail_tag_index, inner_chunks[1]),
+            DetailTab::Tags => render_tags(frame, instance, detail_tag_index, inner_chunks[1]),
         }
     }
 
     // ステータスバー
-    let keybinds = match app.detail_tab {
+    let keybinds = match detail_tab {
         DetailTab::Overview => {
             "Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot y:copy-id Esc:back"
         }
@@ -243,8 +249,9 @@ fn linkable_detail_line<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::View;
     use crate::aws::model::{InstanceState, Volume};
+    use crate::service::ServiceKind;
+    use crate::tab::{ServiceData, TabView};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::collections::HashMap;
@@ -304,13 +311,19 @@ mod tests {
 
     fn app_with_detail() -> App {
         let mut app = App::new("dev".to_string(), None);
-        app.view = View::Ec2Detail;
         app.profile = Some("dev-account".to_string());
         app.region = Some("ap-northeast-1".to_string());
         let instance = create_detail_instance();
-        app.instances = vec![instance.clone()];
-        app.filtered_instances = vec![instance];
-        app.selected_index = 0;
+        app.create_tab(ServiceKind::Ec2);
+        if let Some(tab) = app.active_tab_mut() {
+            tab.tab_view = TabView::Detail;
+            tab.loading = false;
+            tab.data = ServiceData::Ec2 {
+                instances: vec![instance.clone()],
+                filtered_instances: vec![instance],
+            };
+            tab.selected_index = 0;
+        }
         app
     }
 
@@ -373,7 +386,9 @@ mod tests {
     #[test]
     fn render_returns_tags_table_when_tags_tab() {
         let mut app = app_with_detail();
-        app.detail_tab = DetailTab::Tags;
+        if let Some(tab) = app.active_tab_mut() {
+            tab.detail_tab = DetailTab::Tags;
+        }
         let backend = TestBackend::new(80, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -416,7 +431,9 @@ mod tests {
     #[test]
     fn render_returns_tags_snapshot_when_tags_tab() {
         let mut app = app_with_detail();
-        app.detail_tab = DetailTab::Tags;
+        if let Some(tab) = app.active_tab_mut() {
+            tab.detail_tab = DetailTab::Tags;
+        }
         let backend = TestBackend::new(80, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 

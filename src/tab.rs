@@ -1,0 +1,282 @@
+use tui_input::Input;
+
+use crate::app::{DetailTab, Mode, NavigationEntry};
+use crate::aws::ecr_model::{Image, Repository};
+use crate::aws::ecs_model::{Cluster, Service};
+use crate::aws::model::Instance;
+use crate::aws::s3_model::{Bucket, S3Object};
+use crate::aws::secrets_model::{Secret, SecretDetail};
+use crate::aws::vpc_model::{Subnet, Vpc};
+use crate::fuzzy::fuzzy_filter_items;
+use crate::service::ServiceKind;
+use crate::tui::views::secrets_detail::SecretsDetailTab;
+
+/// タブの一意識別子
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TabId(pub u32);
+
+/// タブ内のビュー
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabView {
+    List,
+    Detail,
+}
+
+/// サービス固有のデータ
+#[derive(Debug, Clone)]
+pub enum ServiceData {
+    Ec2 {
+        instances: Vec<Instance>,
+        filtered_instances: Vec<Instance>,
+    },
+    Ecr {
+        repositories: Vec<Repository>,
+        filtered_repositories: Vec<Repository>,
+        images: Vec<Image>,
+    },
+    Ecs {
+        clusters: Vec<Cluster>,
+        filtered_clusters: Vec<Cluster>,
+        services: Vec<Service>,
+    },
+    S3 {
+        buckets: Vec<Bucket>,
+        filtered_buckets: Vec<Bucket>,
+        objects: Vec<S3Object>,
+        selected_bucket: Option<String>,
+        current_prefix: String,
+    },
+    Vpc {
+        vpcs: Vec<Vpc>,
+        filtered_vpcs: Vec<Vpc>,
+        subnets: Vec<Subnet>,
+    },
+    Secrets {
+        secrets: Vec<Secret>,
+        filtered_secrets: Vec<Secret>,
+        detail: Option<Box<SecretDetail>>,
+        detail_tab: SecretsDetailTab,
+    },
+}
+
+impl ServiceData {
+    pub fn new(service: ServiceKind) -> Self {
+        match service {
+            ServiceKind::Ec2 => ServiceData::Ec2 {
+                instances: Vec::new(),
+                filtered_instances: Vec::new(),
+            },
+            ServiceKind::Ecr => ServiceData::Ecr {
+                repositories: Vec::new(),
+                filtered_repositories: Vec::new(),
+                images: Vec::new(),
+            },
+            ServiceKind::Ecs => ServiceData::Ecs {
+                clusters: Vec::new(),
+                filtered_clusters: Vec::new(),
+                services: Vec::new(),
+            },
+            ServiceKind::S3 => ServiceData::S3 {
+                buckets: Vec::new(),
+                filtered_buckets: Vec::new(),
+                objects: Vec::new(),
+                selected_bucket: None,
+                current_prefix: String::new(),
+            },
+            ServiceKind::Vpc => ServiceData::Vpc {
+                vpcs: Vec::new(),
+                filtered_vpcs: Vec::new(),
+                subnets: Vec::new(),
+            },
+            ServiceKind::SecretsManager => ServiceData::Secrets {
+                secrets: Vec::new(),
+                filtered_secrets: Vec::new(),
+                detail: None,
+                detail_tab: SecretsDetailTab::Overview,
+            },
+        }
+    }
+}
+
+/// 1つのタブ
+pub struct Tab {
+    pub id: TabId,
+    pub service: ServiceKind,
+    pub tab_view: TabView,
+    pub mode: Mode,
+    pub loading: bool,
+    pub selected_index: usize,
+    pub filter_input: Input,
+    pub detail_tab: DetailTab,
+    pub detail_tag_index: usize,
+    pub data: ServiceData,
+    pub navigation_stack: Vec<NavigationEntry>,
+    pub navigate_target_id: Option<String>,
+}
+
+impl Tab {
+    pub fn new(id: TabId, service: ServiceKind) -> Self {
+        Self {
+            id,
+            service,
+            tab_view: TabView::List,
+            mode: Mode::Normal,
+            loading: true,
+            selected_index: 0,
+            filter_input: Input::default(),
+            detail_tab: DetailTab::Overview,
+            detail_tag_index: 0,
+            data: ServiceData::new(service),
+            navigation_stack: Vec::new(),
+            navigate_target_id: None,
+        }
+    }
+
+    /// タブのタイトル（タブバー表示用）
+    pub fn title(&self) -> &'static str {
+        self.service.short_name()
+    }
+
+    /// リスト状態をリセットする
+    pub fn reset_list_state(&mut self) {
+        self.selected_index = 0;
+        self.filter_input.reset();
+        self.mode = Mode::Normal;
+    }
+
+    /// 詳細状態をリセットする
+    pub fn reset_detail_state(&mut self) {
+        self.detail_tag_index = 0;
+        self.detail_tab = DetailTab::Overview;
+        if let ServiceData::Secrets { detail_tab, .. } = &mut self.data {
+            *detail_tab = SecretsDetailTab::Overview;
+        }
+    }
+
+    /// 現在のリストビューのフィルタ済みリスト長を返す
+    pub fn filtered_list_len(&self) -> usize {
+        match &self.data {
+            ServiceData::Ec2 {
+                filtered_instances, ..
+            } => filtered_instances.len(),
+            ServiceData::Ecr {
+                filtered_repositories,
+                ..
+            } => filtered_repositories.len(),
+            ServiceData::Ecs {
+                filtered_clusters, ..
+            } => filtered_clusters.len(),
+            ServiceData::S3 {
+                filtered_buckets, ..
+            } => filtered_buckets.len(),
+            ServiceData::Vpc { filtered_vpcs, .. } => filtered_vpcs.len(),
+            ServiceData::Secrets {
+                filtered_secrets, ..
+            } => filtered_secrets.len(),
+        }
+    }
+
+    /// 現在のディテールビューのリスト長を返す
+    pub fn detail_list_len(&self) -> usize {
+        match &self.data {
+            ServiceData::Ec2 {
+                filtered_instances, ..
+            } => {
+                if self.detail_tab == DetailTab::Overview {
+                    crate::app::Ec2DetailField::ALL.len()
+                } else {
+                    filtered_instances
+                        .get(self.selected_index)
+                        .map(|i| i.tags.len())
+                        .unwrap_or(0)
+                }
+            }
+            ServiceData::Ecr { images, .. } => images.len(),
+            ServiceData::Ecs { services, .. } => services.len(),
+            ServiceData::S3 { objects, .. } => objects.len(),
+            ServiceData::Vpc { subnets, .. } => subnets.len(),
+            ServiceData::Secrets {
+                detail, detail_tab, ..
+            } => {
+                if *detail_tab == SecretsDetailTab::Tags {
+                    detail.as_ref().map(|d| d.tags.len()).unwrap_or(0)
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
+    /// フィルタを適用
+    pub fn apply_filter(&mut self) {
+        let filter_text = self.filter_input.value().to_string();
+        match &mut self.data {
+            ServiceData::Ec2 {
+                instances,
+                filtered_instances,
+            } => {
+                *filtered_instances = fuzzy_filter_items(instances, &filter_text, 1, |i| {
+                    vec![
+                        i.instance_id.as_str(),
+                        i.name.as_str(),
+                        i.instance_type.as_str(),
+                        i.state.as_str(),
+                    ]
+                });
+            }
+            ServiceData::Ecr {
+                repositories,
+                filtered_repositories,
+                ..
+            } => {
+                *filtered_repositories = fuzzy_filter_items(repositories, &filter_text, 0, |r| {
+                    vec![r.repository_name.as_str(), r.repository_uri.as_str()]
+                });
+            }
+            ServiceData::Ecs {
+                clusters,
+                filtered_clusters,
+                ..
+            } => {
+                *filtered_clusters = fuzzy_filter_items(clusters, &filter_text, 0, |c| {
+                    vec![c.cluster_name.as_str(), c.status.as_str()]
+                });
+            }
+            ServiceData::S3 {
+                buckets,
+                filtered_buckets,
+                ..
+            } => {
+                *filtered_buckets =
+                    fuzzy_filter_items(buckets, &filter_text, 0, |b| vec![b.name.as_str()]);
+            }
+            ServiceData::Vpc {
+                vpcs,
+                filtered_vpcs,
+                ..
+            } => {
+                *filtered_vpcs = fuzzy_filter_items(vpcs, &filter_text, 1, |v| {
+                    vec![v.vpc_id.as_str(), v.name.as_str(), v.cidr_block.as_str()]
+                });
+            }
+            ServiceData::Secrets {
+                secrets,
+                filtered_secrets,
+                ..
+            } => {
+                *filtered_secrets = fuzzy_filter_items(secrets, &filter_text, 0, |s| {
+                    vec![s.name.as_str(), s.arn.as_str()]
+                });
+            }
+        }
+        let len = self.filtered_list_len();
+        if len > 0 && self.selected_index >= len {
+            self.selected_index = len - 1;
+        }
+    }
+
+    /// サービスデータをクリアする
+    pub fn clear_data(&mut self) {
+        self.data = ServiceData::new(self.service);
+    }
+}
