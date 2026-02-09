@@ -116,11 +116,18 @@ fn handle_help_key(key: KeyEvent) -> Action {
 
 /// サービスピッカーのキー処理
 fn handle_picker_key(key: KeyEvent) -> Action {
+    // C-n / C-p で選択移動
+    if key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::PickerMoveDown;
+    }
+    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::PickerMoveUp;
+    }
     match key.code {
         KeyCode::Enter => Action::PickerConfirm,
         KeyCode::Esc => Action::PickerCancel,
-        KeyCode::Char('j') | KeyCode::Down => Action::PickerMoveDown,
-        KeyCode::Char('k') | KeyCode::Up => Action::PickerMoveUp,
+        KeyCode::Down => Action::PickerMoveDown,
+        KeyCode::Up => Action::PickerMoveUp,
         _ => {
             if let Some(req) = to_input_request(&Event::Key(key)) {
                 Action::PickerHandleInput(req)
@@ -1002,9 +1009,28 @@ mod tests {
     }
 
     #[test]
-    fn handle_key_returns_picker_move_down_when_j_in_picker() {
+    fn handle_key_returns_picker_handle_input_when_j_in_picker() {
         let app = app_with_picker();
-        assert_eq!(handle_key(&app, key_char('j')), Action::PickerMoveDown);
+        let action = handle_key(&app, key_char('j'));
+        assert!(matches!(action, Action::PickerHandleInput(_)));
+    }
+
+    #[test]
+    fn handle_key_returns_picker_move_down_when_ctrl_n_in_picker() {
+        let app = app_with_picker();
+        assert_eq!(
+            handle_key(&app, key_with_ctrl('n')),
+            Action::PickerMoveDown
+        );
+    }
+
+    #[test]
+    fn handle_key_returns_picker_move_up_when_ctrl_p_in_picker() {
+        let app = app_with_picker();
+        assert_eq!(
+            handle_key(&app, key_with_ctrl('p')),
+            Action::PickerMoveUp
+        );
     }
 
     #[test]
