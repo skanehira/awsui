@@ -12,21 +12,25 @@ use crate::tui::theme;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretsDetailTab {
     Overview,
+    Rotation,
+    Versions,
     Tags,
 }
 
 /// シークレット詳細画面を描画する
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
     detail: &SecretDetail,
     tag_selected_index: usize,
     detail_tab: &SecretsDetailTab,
+    value_visible: bool,
     profile: Option<&str>,
     region: Option<&str>,
     area: Rect,
 ) {
     let outer_chunks = Layout::vertical([
-        Constraint::Min(1),    // 外枠（タブバー + コンテンツ）
+        Constraint::Min(1),    // 外枠（ヘッダー + タブバー + コンテンツ）
         Constraint::Length(1), // ステータスバー
     ])
     .split(area);
@@ -42,26 +46,40 @@ pub fn render(
     let inner = outer_block.inner(outer_chunks[0]);
     frame.render_widget(outer_block, outer_chunks[0]);
 
-    // 内側レイアウト: タブバー + コンテンツ
+    // 内側レイアウト: ヘッダー + タブバー + コンテンツ
     let inner_chunks = Layout::vertical([
+        Constraint::Length(5), // 固定ヘッダー（Secret Details 2カラム）
         Constraint::Length(1), // タブバー
-        Constraint::Min(1),    // コンテンツ
+        Constraint::Min(1),    // タブコンテンツ
     ])
     .split(inner);
 
+    // ヘッダー（Secret Details 2カラム）
+    render_header(frame, detail, inner_chunks[0]);
+
     // タブバー
-    render_tab_bar(frame, detail_tab, inner_chunks[0]);
+    render_tab_bar(frame, detail_tab, inner_chunks[1]);
 
     // コンテンツ
     match detail_tab {
-        SecretsDetailTab::Overview => render_overview(frame, detail, inner_chunks[1]),
-        SecretsDetailTab::Tags => render_tags(frame, detail, tag_selected_index, inner_chunks[1]),
+        SecretsDetailTab::Overview => {
+            render_overview(frame, detail, value_visible, inner_chunks[2]);
+        }
+        SecretsDetailTab::Rotation => render_rotation(frame, detail, inner_chunks[2]),
+        SecretsDetailTab::Versions => {
+            render_versions(frame, detail, tag_selected_index, inner_chunks[2]);
+        }
+        SecretsDetailTab::Tags => {
+            render_tags(frame, detail, tag_selected_index, inner_chunks[2]);
+        }
     }
 
     // ステータスバー
     let keybinds = match detail_tab {
-        SecretsDetailTab::Overview => "Tab:switch-tab y:copy-arn Esc:back",
-        SecretsDetailTab::Tags => "Tab:switch-tab y:copy-value Esc:back",
+        SecretsDetailTab::Overview => "[/]:switch-tab v:show/hide-value y:copy-arn Esc:back",
+        SecretsDetailTab::Rotation => "[/]:switch-tab y:copy-arn Esc:back",
+        SecretsDetailTab::Versions => "[/]:switch-tab y:copy-arn Esc:back",
+        SecretsDetailTab::Tags => "[/]:switch-tab y:copy-value Esc:back",
     };
     let status = StatusBar::new(keybinds);
     frame.render_widget(status, outer_chunks[1]);
@@ -85,70 +103,132 @@ fn build_right_title(profile: Option<&str>, region: Option<&str>) -> Option<Stri
     }
 }
 
+/// ヘッダー（Secret Details 2カラム）を描画
+fn render_header(frame: &mut Frame, detail: &SecretDetail, area: Rect) {
+    let block = Block::default()
+        .title(" Secret Details ")
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
+
+    // 左カラム
+    let truncated_arn = truncate_str(&detail.arn, cols[0].width.saturating_sub(16) as usize);
+    let left_lines = vec![
+        detail_line("KMS Key", detail.kms_key_id.as_deref().unwrap_or("-")),
+        detail_line("Name", &detail.name),
+        detail_line("ARN", &truncated_arn),
+    ];
+    let left_para = Paragraph::new(left_lines).wrap(Wrap { trim: false });
+    frame.render_widget(left_para, cols[0]);
+
+    // 右カラム
+    let right_lines = vec![
+        detail_line("Description", detail.description.as_deref().unwrap_or("-")),
+        detail_line("Type", "-"),
+    ];
+    let right_para = Paragraph::new(right_lines).wrap(Wrap { trim: false });
+    frame.render_widget(right_para, cols[1]);
+}
+
 /// タブバーを描画
 fn render_tab_bar(frame: &mut Frame, current_tab: &SecretsDetailTab, area: Rect) {
-    let overview_style = if *current_tab == SecretsDetailTab::Overview {
-        theme::active()
-    } else {
-        theme::inactive()
-    };
-    let tags_style = if *current_tab == SecretsDetailTab::Tags {
-        theme::active()
-    } else {
-        theme::inactive()
+    let tab_style = |tab: &SecretsDetailTab| {
+        if current_tab == tab {
+            theme::active()
+        } else {
+            theme::inactive()
+        }
     };
 
     let tabs = Line::from(vec![
         Span::raw(" "),
-        Span::styled("[Overview]", overview_style),
+        Span::styled("[Overview]", tab_style(&SecretsDetailTab::Overview)),
         Span::raw(" "),
-        Span::styled("[Tags]", tags_style),
+        Span::styled("[Rotation]", tab_style(&SecretsDetailTab::Rotation)),
+        Span::raw(" "),
+        Span::styled("[Versions]", tab_style(&SecretsDetailTab::Versions)),
+        Span::raw(" "),
+        Span::styled("[Tags]", tab_style(&SecretsDetailTab::Tags)),
     ]);
     frame.render_widget(Paragraph::new(tabs), area);
 }
 
-/// Overviewタブを描画
-fn render_overview(frame: &mut Frame, detail: &SecretDetail, area: Rect) {
+/// Overviewタブを描画（Secret Value セクション）
+fn render_overview(frame: &mut Frame, detail: &SecretDetail, value_visible: bool, area: Rect) {
+    let block = Block::default()
+        .title(" Secret Value ")
+        .borders(Borders::ALL);
+
+    let content = match (&detail.secret_value, value_visible) {
+        (None, _) => "  Press 'v' to retrieve and show secret value".to_string(),
+        (Some(_), false) => "  ********".to_string(),
+        (Some(val), true) => format!("  {}", val),
+    };
+
+    let para = Paragraph::new(content)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// Rotationタブを描画
+fn render_rotation(frame: &mut Frame, detail: &SecretDetail, area: Rect) {
     let rotation_status = if detail.rotation_enabled {
         "Enabled"
     } else {
         "Disabled"
     };
 
-    let versions_count = detail.version_ids.len().to_string();
+    let interval = detail
+        .rotation_days
+        .map(|d| format!("{} days", d))
+        .unwrap_or_else(|| "-".to_string());
+
     let lines = vec![
-        detail_line("Name", &detail.name),
-        detail_line("ARN", &detail.arn),
-        detail_line("Description", detail.description.as_deref().unwrap_or("-")),
-        detail_line("KMS Key", detail.kms_key_id.as_deref().unwrap_or("-")),
-        detail_line("Rotation", rotation_status),
+        detail_line("Status", rotation_status),
         detail_line(
-            "Rotation Fn",
+            "Lambda ARN",
             detail.rotation_lambda_arn.as_deref().unwrap_or("-"),
         ),
+        detail_line("Interval", &interval),
         detail_line(
             "Last Rotated",
             detail.last_rotated_date.as_deref().unwrap_or("-"),
         ),
-        detail_line(
-            "Last Changed",
-            detail.last_changed_date.as_deref().unwrap_or("-"),
-        ),
-        detail_line(
-            "Last Accessed",
-            detail.last_accessed_date.as_deref().unwrap_or("-"),
-        ),
-        detail_line("Created", detail.created_date.as_deref().unwrap_or("-")),
-        detail_line("Versions", &versions_count),
     ];
 
     let block = Block::default()
-        .title(" Secret Info ")
+        .title(" Rotation Configuration ")
         .borders(Borders::ALL);
     let para = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
+}
+
+/// Versionsタブを描画
+fn render_versions(frame: &mut Frame, detail: &SecretDetail, selected_index: usize, area: Rect) {
+    let headers = Row::new(vec!["Version ID", "Staging Labels"]).style(theme::header());
+
+    let version_data: Vec<(String, String)> = detail
+        .version_stages
+        .iter()
+        .map(|v| (v.version_id.clone(), v.staging_labels.join(", ")))
+        .collect();
+
+    let rows: Vec<Row> = version_data
+        .iter()
+        .map(|(id, labels)| Row::new(vec![id.as_str(), labels.as_str()]))
+        .collect();
+
+    let widths = vec![Constraint::Percentage(50), Constraint::Percentage(50)];
+
+    let table = SelectableTable::new(headers, rows, widths);
+    let widget = SelectableTableWidget::new(table, selected_index);
+    frame.render_widget(widget, area);
 }
 
 /// Tagsタブを描画
@@ -178,9 +258,19 @@ fn detail_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
     ])
 }
 
+/// 文字列を指定幅で切り詰める
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aws::secrets_model::SecretVersion;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::collections::HashMap;
@@ -212,12 +302,24 @@ mod tests {
             rotation_lambda_arn: Some(
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:rotate".to_string(),
             ),
+            rotation_days: Some(30),
             last_rotated_date: Some("2025-01-10T12:00:00Z".to_string()),
             last_changed_date: Some("2025-01-15T10:30:00Z".to_string()),
             last_accessed_date: Some("2025-01-20T08:00:00Z".to_string()),
             created_date: Some("2024-06-01T09:00:00Z".to_string()),
             tags,
             version_ids: vec!["v1-abc123".to_string(), "v2-def456".to_string()],
+            version_stages: vec![
+                SecretVersion {
+                    version_id: "v1-abc123".to_string(),
+                    staging_labels: vec!["AWSPREVIOUS".to_string()],
+                },
+                SecretVersion {
+                    version_id: "v2-def456".to_string(),
+                    staging_labels: vec!["AWSCURRENT".to_string()],
+                },
+            ],
+            secret_value: None,
         }
     }
 
@@ -234,6 +336,7 @@ mod tests {
                     &detail,
                     0,
                     &SecretsDetailTab::Overview,
+                    false,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     frame.area(),
@@ -243,11 +346,13 @@ mod tests {
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("[Overview]"));
+        assert!(content.contains("[Rotation]"));
+        assert!(content.contains("[Versions]"));
         assert!(content.contains("[Tags]"));
     }
 
     #[test]
-    fn render_returns_secret_info_when_overview_tab() {
+    fn render_returns_header_two_columns_when_overview_tab() {
         let detail = create_test_detail();
         let backend = TestBackend::new(90, 25);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -259,6 +364,7 @@ mod tests {
                     &detail,
                     0,
                     &SecretsDetailTab::Overview,
+                    false,
                     None,
                     None,
                     frame.area(),
@@ -267,9 +373,146 @@ mod tests {
             .unwrap();
 
         let content = buffer_to_string(&terminal);
+        assert!(content.contains("Secret Details"));
+        assert!(content.contains("KMS Key"));
+        assert!(content.contains("Description"));
         assert!(content.contains("db-password"));
-        assert!(content.contains("Database password"));
+    }
+
+    #[test]
+    fn render_returns_secret_value_prompt_when_value_not_loaded() {
+        let detail = create_test_detail();
+        let backend = TestBackend::new(90, 25);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &detail,
+                    0,
+                    &SecretsDetailTab::Overview,
+                    false,
+                    None,
+                    None,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Press 'v' to retrieve and show secret value"));
+    }
+
+    #[test]
+    fn render_returns_masked_value_when_value_loaded_but_hidden() {
+        let mut detail = create_test_detail();
+        detail.secret_value = Some("my-secret-password".to_string());
+        let backend = TestBackend::new(90, 25);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &detail,
+                    0,
+                    &SecretsDetailTab::Overview,
+                    false,
+                    None,
+                    None,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("********"));
+        assert!(!content.contains("my-secret-password"));
+    }
+
+    #[test]
+    fn render_returns_plain_value_when_value_visible() {
+        let mut detail = create_test_detail();
+        detail.secret_value = Some("my-secret-password".to_string());
+        let backend = TestBackend::new(90, 25);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &detail,
+                    0,
+                    &SecretsDetailTab::Overview,
+                    true,
+                    None,
+                    None,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("my-secret-password"));
+    }
+
+    #[test]
+    fn render_returns_rotation_info_when_rotation_tab() {
+        let detail = create_test_detail();
+        let backend = TestBackend::new(90, 25);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &detail,
+                    0,
+                    &SecretsDetailTab::Rotation,
+                    false,
+                    None,
+                    None,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Rotation Configuration"));
         assert!(content.contains("Enabled"));
+        assert!(content.contains("30 days"));
+        assert!(content.contains("Lambda ARN"));
+    }
+
+    #[test]
+    fn render_returns_versions_table_when_versions_tab() {
+        let detail = create_test_detail();
+        let backend = TestBackend::new(90, 25);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &detail,
+                    0,
+                    &SecretsDetailTab::Versions,
+                    false,
+                    None,
+                    None,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Version ID"));
+        assert!(content.contains("Staging Labels"));
+        assert!(content.contains("v1-abc123"));
+        assert!(content.contains("AWSPREVIOUS"));
+        assert!(content.contains("v2-def456"));
+        assert!(content.contains("AWSCURRENT"));
     }
 
     #[test]
@@ -285,6 +528,7 @@ mod tests {
                     &detail,
                     0,
                     &SecretsDetailTab::Tags,
+                    false,
                     None,
                     None,
                     frame.area(),
@@ -314,6 +558,7 @@ mod tests {
                     &detail,
                     0,
                     &SecretsDetailTab::Overview,
+                    false,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     frame.area(),
@@ -324,7 +569,6 @@ mod tests {
         let content = buffer_to_string(&terminal);
         assert!(content.contains("dev-account"));
         assert!(content.contains("ap-northeast-1"));
-        assert!(content.contains("Tab:switch-tab"));
     }
 
     #[test]
@@ -340,6 +584,7 @@ mod tests {
                     &detail,
                     0,
                     &SecretsDetailTab::Overview,
+                    false,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     frame.area(),
@@ -363,6 +608,7 @@ mod tests {
                     &detail,
                     0,
                     &SecretsDetailTab::Tags,
+                    false,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
                     frame.area(),
@@ -379,6 +625,7 @@ mod tests {
         detail.rotation_enabled = false;
         detail.rotation_lambda_arn = None;
         detail.last_rotated_date = None;
+        detail.rotation_days = None;
         let backend = TestBackend::new(90, 25);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -388,7 +635,8 @@ mod tests {
                     frame,
                     &detail,
                     0,
-                    &SecretsDetailTab::Overview,
+                    &SecretsDetailTab::Rotation,
+                    false,
                     None,
                     None,
                     frame.area(),

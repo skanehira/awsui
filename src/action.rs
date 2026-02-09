@@ -25,6 +25,8 @@ pub enum Action {
     DismissMessage,
     ShowHelp,
     SwitchDetailTab,
+    PrevDetailTab,
+    RevealSecretValue,
     FollowLink,
     /// CRUD操作
     Create,

@@ -56,6 +56,7 @@ pub enum ServiceData {
         filtered_secrets: Vec<Secret>,
         detail: Option<Box<SecretDetail>>,
         detail_tab: SecretsDetailTab,
+        value_visible: bool,
     },
 }
 
@@ -93,6 +94,7 @@ impl ServiceData {
                 filtered_secrets: Vec::new(),
                 detail: None,
                 detail_tab: SecretsDetailTab::Overview,
+                value_visible: false,
             },
         }
     }
@@ -148,8 +150,14 @@ impl Tab {
     pub fn reset_detail_state(&mut self) {
         self.detail_tag_index = 0;
         self.detail_tab = DetailTab::Overview;
-        if let ServiceData::Secrets { detail_tab, .. } = &mut self.data {
+        if let ServiceData::Secrets {
+            detail_tab,
+            value_visible,
+            ..
+        } = &mut self.data
+        {
             *detail_tab = SecretsDetailTab::Overview;
+            *value_visible = false;
         }
     }
 
@@ -197,13 +205,13 @@ impl Tab {
             ServiceData::Vpc { subnets, .. } => subnets.len(),
             ServiceData::Secrets {
                 detail, detail_tab, ..
-            } => {
-                if *detail_tab == SecretsDetailTab::Tags {
-                    detail.as_ref().map(|d| d.tags.len()).unwrap_or(0)
-                } else {
-                    0
+            } => match detail_tab {
+                SecretsDetailTab::Tags => detail.as_ref().map(|d| d.tags.len()).unwrap_or(0),
+                SecretsDetailTab::Versions => {
+                    detail.as_ref().map(|d| d.version_stages.len()).unwrap_or(0)
                 }
-            }
+                _ => 0,
+            },
         }
     }
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use crate::aws::secrets_model::{Secret, SecretDetail};
+use crate::aws::secrets_model::{Secret, SecretDetail, SecretVersion};
 use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
@@ -22,6 +22,7 @@ pub trait SecretsClient: Send + Sync {
     ) -> Result<(), AppError>;
     async fn update_secret_value(&self, secret_id: &str, value: &str) -> Result<(), AppError>;
     async fn delete_secret(&self, secret_id: &str) -> Result<(), AppError>;
+    async fn get_secret_value(&self, secret_id: &str) -> Result<String, AppError>;
 }
 
 /// AWS SDK Secrets Managerクライアントの実装
@@ -122,6 +123,20 @@ impl SecretsClient for AwsSecretsClient {
             .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
         Ok(())
     }
+
+    async fn get_secret_value(&self, secret_id: &str) -> Result<String, AppError> {
+        let resp = self
+            .client
+            .get_secret_value()
+            .secret_id(secret_id)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+
+        resp.secret_string()
+            .map(String::from)
+            .ok_or_else(|| AppError::AwsApi("Secret value is not a string".to_string()))
+    }
 }
 
 /// SDK の SecretListEntry → ドメインの Secret
@@ -171,6 +186,22 @@ fn convert_secret_detail(
         .map(|v| v.keys().cloned().collect())
         .unwrap_or_default();
 
+    let version_stages: Vec<SecretVersion> = sdk
+        .version_ids_to_stages()
+        .map(|v| {
+            v.iter()
+                .map(|(id, labels)| SecretVersion {
+                    version_id: id.clone(),
+                    staging_labels: labels.iter().map(|l| l.as_str().to_string()).collect(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let rotation_days = sdk
+        .rotation_rules()
+        .and_then(|r| r.automatically_after_days());
+
     SecretDetail {
         name: sdk.name().unwrap_or_default().to_string(),
         arn: sdk.arn().unwrap_or_default().to_string(),
@@ -178,6 +209,7 @@ fn convert_secret_detail(
         kms_key_id: sdk.kms_key_id().map(String::from),
         rotation_enabled: sdk.rotation_enabled().unwrap_or(false),
         rotation_lambda_arn: sdk.rotation_lambda_arn().map(String::from),
+        rotation_days,
         last_rotated_date: sdk.last_rotated_date().map(|t| {
             t.fmt(aws_sdk_secretsmanager::primitives::DateTimeFormat::DateTime)
                 .unwrap_or_default()
@@ -196,5 +228,7 @@ fn convert_secret_detail(
         }),
         tags,
         version_ids,
+        version_stages,
+        secret_value: None,
     }
 }

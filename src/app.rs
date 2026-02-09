@@ -700,6 +700,8 @@ impl App {
             Action::DismissMessage => self.dismiss_message(),
             Action::ShowHelp => self.show_help = true,
             Action::SwitchDetailTab => self.switch_detail_tab(),
+            Action::PrevDetailTab => self.prev_detail_tab(),
+            Action::RevealSecretValue => self.reveal_secret_value(),
             Action::FollowLink => self.handle_follow_link(),
             Action::Create => self.handle_create(),
             Action::Delete => self.handle_delete(),
@@ -1008,6 +1010,30 @@ impl App {
                     if let Some(tab) = self.find_tab_mut(tab_id) {
                         if let ServiceData::Secrets { detail: det, .. } = &mut tab.data {
                             *det = Some(detail);
+                        }
+                        tab.loading = false;
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::SecretValueLoaded(result) => match result {
+                Ok(value) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        if let ServiceData::Secrets {
+                            detail,
+                            value_visible,
+                            ..
+                        } = &mut tab.data
+                        {
+                            if let Some(d) = detail {
+                                d.secret_value = Some(value);
+                            }
+                            *value_visible = true;
                         }
                         tab.loading = false;
                     }
@@ -1429,12 +1455,58 @@ impl App {
             ServiceKind::SecretsManager => {
                 if let crate::tab::ServiceData::Secrets { detail_tab, .. } = &mut tab.data {
                     *detail_tab = match detail_tab {
-                        SecretsDetailTab::Overview => SecretsDetailTab::Tags,
+                        SecretsDetailTab::Overview => SecretsDetailTab::Rotation,
+                        SecretsDetailTab::Rotation => SecretsDetailTab::Versions,
+                        SecretsDetailTab::Versions => SecretsDetailTab::Tags,
                         SecretsDetailTab::Tags => SecretsDetailTab::Overview,
                     };
                 }
             }
             _ => {}
+        }
+    }
+
+    fn prev_detail_tab(&mut self) {
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        tab.detail_tag_index = 0;
+        match tab.service {
+            ServiceKind::Ec2 => {
+                tab.detail_tab = match tab.detail_tab {
+                    DetailTab::Overview => DetailTab::Tags,
+                    DetailTab::Tags => DetailTab::Overview,
+                };
+            }
+            ServiceKind::SecretsManager => {
+                if let crate::tab::ServiceData::Secrets { detail_tab, .. } = &mut tab.data {
+                    *detail_tab = match detail_tab {
+                        SecretsDetailTab::Overview => SecretsDetailTab::Tags,
+                        SecretsDetailTab::Tags => SecretsDetailTab::Versions,
+                        SecretsDetailTab::Versions => SecretsDetailTab::Rotation,
+                        SecretsDetailTab::Rotation => SecretsDetailTab::Overview,
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn reveal_secret_value(&mut self) {
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        if let crate::tab::ServiceData::Secrets {
+            detail: Some(d),
+            value_visible,
+            ..
+        } = &mut tab.data
+        {
+            if d.secret_value.is_some() {
+                *value_visible = !*value_visible;
+            } else {
+                tab.loading = true;
+            }
         }
     }
 
@@ -2337,12 +2409,15 @@ mod tests {
                 kms_key_id: None,
                 rotation_enabled: false,
                 rotation_lambda_arn: None,
+                rotation_days: None,
                 last_rotated_date: None,
                 last_changed_date: None,
                 last_accessed_date: None,
                 created_date: None,
                 tags: HashMap::new(),
                 version_ids: Vec::new(),
+                version_stages: Vec::new(),
+                secret_value: None,
             }));
         }
         app.dispatch(Action::Edit);

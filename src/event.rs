@@ -46,6 +46,9 @@ pub enum TabEvent {
     /// シークレット詳細の読み込み完了
     SecretDetailLoaded(Result<Box<SecretDetail>, AppError>),
 
+    /// シークレット値の取得完了
+    SecretValueLoaded(Result<String, AppError>),
+
     /// ナビゲーションリンク先のVPCデータ読み込み完了
     NavigateVpcLoaded(Result<(Vec<Vpc>, Vec<Subnet>), AppError>),
 }

@@ -275,6 +275,7 @@ fn handle_ec2_detail_key(key: KeyEvent) -> Action {
     }
     match key.code {
         KeyCode::Char(']') => Action::SwitchDetailTab,
+        KeyCode::Char('[') => Action::PrevDetailTab,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Enter => Action::FollowLink,
@@ -293,6 +294,7 @@ fn handle_generic_detail_key(key: KeyEvent) -> Action {
         return Action::Quit;
     }
     match key.code {
+        KeyCode::Char('[') => Action::PrevDetailTab,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Char('g') => Action::MoveToTop,
@@ -310,6 +312,7 @@ fn handle_s3_detail_key(key: KeyEvent) -> Action {
         return Action::Quit;
     }
     match key.code {
+        KeyCode::Char('[') => Action::PrevDetailTab,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Char('g') => Action::MoveToTop,
@@ -329,6 +332,8 @@ fn handle_secrets_detail_key(key: KeyEvent) -> Action {
     }
     match key.code {
         KeyCode::Char(']') => Action::SwitchDetailTab,
+        KeyCode::Char('[') => Action::PrevDetailTab,
+        KeyCode::Char('v') => Action::RevealSecretValue,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Char('y') => Action::CopyId,
@@ -1018,19 +1023,13 @@ mod tests {
     #[test]
     fn handle_key_returns_picker_move_down_when_ctrl_n_in_picker() {
         let app = app_with_picker();
-        assert_eq!(
-            handle_key(&app, key_with_ctrl('n')),
-            Action::PickerMoveDown
-        );
+        assert_eq!(handle_key(&app, key_with_ctrl('n')), Action::PickerMoveDown);
     }
 
     #[test]
     fn handle_key_returns_picker_move_up_when_ctrl_p_in_picker() {
         let app = app_with_picker();
-        assert_eq!(
-            handle_key(&app, key_with_ctrl('p')),
-            Action::PickerMoveUp
-        );
+        assert_eq!(handle_key(&app, key_with_ctrl('p')), Action::PickerMoveUp);
     }
 
     #[test]

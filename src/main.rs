@@ -402,7 +402,10 @@ fn render_tab_content(
         }
         Some(View::SecretsDetail) => {
             if let awsui::tab::ServiceData::Secrets {
-                detail, detail_tab, ..
+                detail,
+                detail_tab,
+                value_visible,
+                ..
             } = &tab.data
                 && let Some(detail) = detail
             {
@@ -411,6 +414,7 @@ fn render_tab_content(
                     detail,
                     tab.detail_tag_index,
                     detail_tab,
+                    *value_visible,
                     app.profile.as_deref(),
                     app.region.as_deref(),
                     area,
@@ -534,6 +538,12 @@ async fn handle_side_effects(
         // ナビゲーションリンク（EC2 Detail → VPC Detail）
         if was_same_detail && matches!(current_view, Some(View::VpcDetail)) {
             handle_navigation_link(app, clients, tab_id).await;
+            return;
+        }
+
+        // シークレット値取得（SecretsDetail → SecretsDetail, loading=true）
+        if was_same_detail && matches!(current_view, Some(View::SecretsDetail)) {
+            load_secret_value(app, clients, tab_id);
             return;
         }
     }
@@ -847,6 +857,29 @@ fn load_detail_data(app: &App, clients: &Clients, tab_id: TabId) {
             }
         }
         _ => {}
+    }
+}
+
+fn load_secret_value(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::Secrets { detail, .. } = &tab.data
+        && let Some(d) = detail
+        && let Some(client) = &clients.secrets
+    {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let secret_id = d.arn.clone();
+        tokio::spawn(async move {
+            let result = c.get_secret_value(&secret_id).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::SecretValueLoaded(result),
+                ))
+                .await;
+        });
     }
 }
 
