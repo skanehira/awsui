@@ -1,4 +1,9 @@
 mod common;
 mod test_dashboard;
 mod test_ec2;
+mod test_ecr;
+mod test_ecs;
+mod test_s3;
+mod test_secrets;
 mod test_tabs;
+mod test_vpc;

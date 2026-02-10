@@ -136,6 +136,17 @@ impl TestHarness {
     pub fn wait_exit(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
         self.child.wait()
     }
+
+    /// ダッシュボードから指定されたサービスを選択して開く。
+    /// `down_count` 回下矢印を押してからEnterを押す。
+    /// ServiceKind::ALL の順序: EC2=0, ECR=1, ECS=2, S3=3, VPC=4, SecretsManager=5
+    pub fn select_service(&mut self, down_count: usize) {
+        self.wait_for_text("All Services").unwrap();
+        for _ in 0..down_count {
+            self.send_down().unwrap();
+        }
+        self.send_enter().unwrap();
+    }
 }
 
 /// テスト用ハーネスを起動するヘルパー
