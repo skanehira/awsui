@@ -7,7 +7,6 @@ use crate::cli::DeletePermissions;
 use crate::event::AppEvent;
 use crate::fuzzy::fuzzy_filter_items;
 use crate::service::ServiceKind;
-use crate::tui::views::secrets_detail::SecretsDetailTab;
 pub use crate::ui_state::*;
 
 /// アプリケーション全体の状態
@@ -645,9 +644,7 @@ impl App {
                 } else {
                     false
                 };
-                if is_empty
-                    && let Some(msg) = empty_message
-                {
+                if is_empty && let Some(msg) = empty_message {
                     self.show_message(MessageLevel::Info, "Info", msg);
                 }
             }
@@ -1100,16 +1097,8 @@ impl App {
             self.dashboard.selected_index = self.dashboard.selected_index.saturating_sub(1);
             return;
         }
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        match tab.tab_view {
-            crate::tab::TabView::List => {
-                tab.selected_index = tab.selected_index.saturating_sub(1);
-            }
-            crate::tab::TabView::Detail => {
-                tab.detail_tag_index = tab.detail_tag_index.saturating_sub(1);
-            }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.move_up();
         }
     }
 
@@ -1121,22 +1110,8 @@ impl App {
             }
             return;
         }
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        match tab.tab_view {
-            crate::tab::TabView::List => {
-                let max = tab.filtered_list_len().saturating_sub(1);
-                if tab.selected_index < max {
-                    tab.selected_index += 1;
-                }
-            }
-            crate::tab::TabView::Detail => {
-                let max = tab.detail_list_len().saturating_sub(1);
-                if tab.detail_tag_index < max {
-                    tab.detail_tag_index += 1;
-                }
-            }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.move_down();
         }
     }
 
@@ -1145,12 +1120,8 @@ impl App {
             self.dashboard.selected_index = 0;
             return;
         }
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        match tab.tab_view {
-            crate::tab::TabView::List => tab.selected_index = 0,
-            crate::tab::TabView::Detail => tab.detail_tag_index = 0,
+        if let Some(tab) = self.active_tab_mut() {
+            tab.move_to_top();
         }
     }
 
@@ -1159,16 +1130,8 @@ impl App {
             self.dashboard.selected_index = self.dashboard.item_count().saturating_sub(1);
             return;
         }
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        match tab.tab_view {
-            crate::tab::TabView::List => {
-                tab.selected_index = tab.filtered_list_len().saturating_sub(1);
-            }
-            crate::tab::TabView::Detail => {
-                tab.detail_tag_index = tab.detail_list_len().saturating_sub(1);
-            }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.move_to_bottom();
         }
     }
 
@@ -1177,16 +1140,8 @@ impl App {
             self.dashboard.selected_index = self.dashboard.selected_index.saturating_sub(10);
             return;
         }
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        match tab.tab_view {
-            crate::tab::TabView::List => {
-                tab.selected_index = tab.selected_index.saturating_sub(10);
-            }
-            crate::tab::TabView::Detail => {
-                tab.detail_tag_index = tab.detail_tag_index.saturating_sub(10);
-            }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.half_page_up();
         }
     }
 
@@ -1196,18 +1151,8 @@ impl App {
             self.dashboard.selected_index = (self.dashboard.selected_index + 10).min(max);
             return;
         }
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        match tab.tab_view {
-            crate::tab::TabView::List => {
-                let max = tab.filtered_list_len().saturating_sub(1);
-                tab.selected_index = (tab.selected_index + 10).min(max);
-            }
-            crate::tab::TabView::Detail => {
-                let max = tab.detail_list_len().saturating_sub(1);
-                tab.detail_tag_index = (tab.detail_tag_index + 10).min(max);
-            }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.half_page_down();
         }
     }
 
@@ -1219,76 +1164,8 @@ impl App {
             self.create_tab(service);
             return;
         }
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        match tab.tab_view {
-            crate::tab::TabView::List => {
-                if tab.filtered_list_len() == 0 {
-                    return;
-                }
-                // S3: バケット選択時にselected_bucketを設定
-                if tab.service == ServiceKind::S3
-                    && let crate::tab::ServiceData::S3 {
-                        filtered_buckets,
-                        selected_bucket,
-                        current_prefix,
-                        ..
-                    } = &mut tab.data
-                    && let Some(bucket) = filtered_buckets.get(tab.selected_index)
-                {
-                    *selected_bucket = Some(bucket.name.clone());
-                    current_prefix.clear();
-                }
-                tab.tab_view = crate::tab::TabView::Detail;
-                tab.reset_detail_state();
-                // EC2は詳細画面でloadingしない（リストデータから表示）
-                if tab.service != ServiceKind::Ec2 {
-                    tab.loading = true;
-                }
-            }
-            crate::tab::TabView::Detail => {
-                // ECS Detail: 3段階ナビゲーション
-                if tab.service == ServiceKind::Ecs
-                    && let crate::tab::ServiceData::Ecs {
-                        services,
-                        selected_service_index,
-                        tasks,
-                        selected_task_index,
-                        ..
-                    } = &mut tab.data
-                {
-                    if selected_service_index.is_some() {
-                        // サービス詳細 → タスク詳細
-                        if selected_task_index.is_none()
-                            && !tasks.is_empty()
-                            && tab.detail_tag_index < tasks.len()
-                        {
-                            *selected_task_index = Some(tab.detail_tag_index);
-                        }
-                    } else if !services.is_empty() && tab.detail_tag_index < services.len() {
-                        // サービス一覧 → サービス詳細（タスク読み込みトリガー）
-                        *selected_service_index = Some(tab.detail_tag_index);
-                        tab.detail_tag_index = 0;
-                        tab.loading = true;
-                    }
-                }
-
-                // S3 Detail: プレフィックス(ディレクトリ)の場合は中に入る
-                if tab.service == ServiceKind::S3
-                    && let crate::tab::ServiceData::S3 {
-                        objects,
-                        current_prefix,
-                        ..
-                    } = &mut tab.data
-                    && let Some(obj) = objects.get(tab.detail_tag_index)
-                    && obj.is_prefix
-                {
-                    *current_prefix = obj.key.clone();
-                    tab.detail_tag_index = 0;
-                    tab.loading = true;
-                }
-            }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.handle_enter();
         }
     }
 
@@ -1296,170 +1173,14 @@ impl App {
         if self.show_dashboard {
             return;
         }
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        match tab.tab_view {
-            crate::tab::TabView::List => {
-                // リストビューではEscは何もしない
-            }
-            crate::tab::TabView::Detail => {
-                // S3: プレフィックス内にいる場合は一つ上に移動
-                if tab.service == ServiceKind::S3
-                    && let crate::tab::ServiceData::S3 {
-                        current_prefix,
-                        objects,
-                        selected_bucket,
-                        ..
-                    } = &mut tab.data
-                {
-                    if !current_prefix.is_empty() {
-                        let trimmed = current_prefix.trim_end_matches('/');
-                        if let Some(pos) = trimmed.rfind('/') {
-                            *current_prefix = trimmed[..=pos].to_string();
-                        } else {
-                            current_prefix.clear();
-                        }
-                        tab.detail_tag_index = 0;
-                        tab.loading = true;
-                        return;
-                    }
-                    // ルートにいる場合はリストに戻る
-                    objects.clear();
-                    *selected_bucket = None;
-                }
-
-                // VPC: ナビゲーションスタックがある場合は戻る
-                if tab.service == ServiceKind::Vpc {
-                    if let Some(entry) = tab.navigation_stack.pop() {
-                        tab.selected_index = entry.selected_index;
-                        tab.detail_tag_index = entry.detail_tag_index;
-                        tab.detail_tab = entry.detail_tab;
-                        if let crate::tab::ServiceData::Vpc { subnets, .. } = &mut tab.data {
-                            subnets.clear();
-                        }
-                        return;
-                    }
-                    if let crate::tab::ServiceData::Vpc { subnets, .. } = &mut tab.data {
-                        subnets.clear();
-                    }
-                }
-
-                // ECR: イメージをクリア
-                if tab.service == ServiceKind::Ecr
-                    && let crate::tab::ServiceData::Ecr { images, .. } = &mut tab.data
-                {
-                    images.clear();
-                }
-
-                // ECS: ログ→タスク詳細→サービス詳細→サービス一覧→クラスター一覧
-                if tab.service == ServiceKind::Ecs
-                    && let crate::tab::ServiceData::Ecs {
-                        services,
-                        selected_service_index,
-                        tasks,
-                        selected_task_index,
-                        log_state,
-                        ..
-                    } = &mut tab.data
-                {
-                    if log_state.is_some() {
-                        *log_state = None;
-                        return;
-                    }
-                    if selected_task_index.is_some() {
-                        *selected_task_index = None;
-                        return;
-                    }
-                    if selected_service_index.is_some() {
-                        *selected_service_index = None;
-                        tasks.clear();
-                        tab.detail_tag_index = 0;
-                        return;
-                    }
-                    services.clear();
-                }
-
-                // Secrets: 詳細をクリア
-                if tab.service == ServiceKind::SecretsManager
-                    && let crate::tab::ServiceData::Secrets { detail, .. } = &mut tab.data
-                {
-                    *detail = None;
-                }
-
-                // EC2: ナビゲーションスタックをクリア
-                if tab.service == ServiceKind::Ec2 {
-                    tab.navigation_stack.clear();
-                }
-
-                tab.tab_view = crate::tab::TabView::List;
-            }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.handle_back();
         }
     }
 
     fn copy_id(&self) {
-        let Some(view) = self.current_view() else {
-            return;
-        };
-        let Some(tab) = self.active_tab() else {
-            return;
-        };
-        match view {
-            View::Ec2List | View::Ec2Detail => {
-                if let Some(instance) = self.selected_instance() {
-                    let _ = cli_clipboard::set_contents(instance.instance_id.clone());
-                }
-            }
-            View::EcrList => {
-                if let crate::tab::ServiceData::Ecr {
-                    filtered_repositories,
-                    ..
-                } = &tab.data
-                    && let Some(repo) = filtered_repositories.get(tab.selected_index)
-                {
-                    let _ = cli_clipboard::set_contents(repo.repository_uri.clone());
-                }
-            }
-            View::EcrDetail => {
-                if let crate::tab::ServiceData::Ecr { images, .. } = &tab.data
-                    && let Some(image) = images.get(tab.detail_tag_index)
-                {
-                    let _ = cli_clipboard::set_contents(image.image_digest.clone());
-                }
-            }
-            View::VpcList => {
-                if let crate::tab::ServiceData::Vpc { filtered_vpcs, .. } = &tab.data
-                    && let Some(vpc) = filtered_vpcs.get(tab.selected_index)
-                {
-                    let _ = cli_clipboard::set_contents(vpc.vpc_id.clone());
-                }
-            }
-            View::SecretsList => {
-                if let crate::tab::ServiceData::Secrets {
-                    filtered_secrets, ..
-                } = &tab.data
-                    && let Some(secret) = filtered_secrets.get(tab.selected_index)
-                {
-                    let _ = cli_clipboard::set_contents(secret.arn.clone());
-                }
-            }
-            View::SecretsDetail => {
-                if let crate::tab::ServiceData::Secrets { detail, .. } = &tab.data
-                    && let Some(d) = detail
-                {
-                    let _ = cli_clipboard::set_contents(d.arn.clone());
-                }
-            }
-            View::S3List => {
-                if let crate::tab::ServiceData::S3 {
-                    filtered_buckets, ..
-                } = &tab.data
-                    && let Some(bucket) = filtered_buckets.get(tab.selected_index)
-                {
-                    let _ = cli_clipboard::set_contents(bucket.name.clone());
-                }
-            }
-            _ => {}
+        if let Some(tab) = self.active_tab() {
+            tab.copy_id();
         }
     }
 
@@ -1504,54 +1225,14 @@ impl App {
     }
 
     fn switch_detail_tab(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        tab.detail_tag_index = 0;
-        match tab.service {
-            ServiceKind::Ec2 => {
-                tab.detail_tab = match tab.detail_tab {
-                    DetailTab::Overview => DetailTab::Tags,
-                    DetailTab::Tags => DetailTab::Overview,
-                };
-            }
-            ServiceKind::SecretsManager => {
-                if let crate::tab::ServiceData::Secrets { detail_tab, .. } = &mut tab.data {
-                    *detail_tab = match detail_tab {
-                        SecretsDetailTab::Overview => SecretsDetailTab::Rotation,
-                        SecretsDetailTab::Rotation => SecretsDetailTab::Versions,
-                        SecretsDetailTab::Versions => SecretsDetailTab::Tags,
-                        SecretsDetailTab::Tags => SecretsDetailTab::Overview,
-                    };
-                }
-            }
-            _ => {}
+        if let Some(tab) = self.active_tab_mut() {
+            tab.switch_detail_tab();
         }
     }
 
     fn prev_detail_tab(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        tab.detail_tag_index = 0;
-        match tab.service {
-            ServiceKind::Ec2 => {
-                tab.detail_tab = match tab.detail_tab {
-                    DetailTab::Overview => DetailTab::Tags,
-                    DetailTab::Tags => DetailTab::Overview,
-                };
-            }
-            ServiceKind::SecretsManager => {
-                if let crate::tab::ServiceData::Secrets { detail_tab, .. } = &mut tab.data {
-                    *detail_tab = match detail_tab {
-                        SecretsDetailTab::Overview => SecretsDetailTab::Tags,
-                        SecretsDetailTab::Tags => SecretsDetailTab::Versions,
-                        SecretsDetailTab::Versions => SecretsDetailTab::Rotation,
-                        SecretsDetailTab::Rotation => SecretsDetailTab::Overview,
-                    };
-                }
-            }
-            _ => {}
+        if let Some(tab) = self.active_tab_mut() {
+            tab.prev_detail_tab();
         }
     }
 

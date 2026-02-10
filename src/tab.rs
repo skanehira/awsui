@@ -1,6 +1,6 @@
 use tui_input::Input;
 
-use crate::app::{DetailTab, Mode, NavigationEntry};
+use crate::app::{DetailTab, Ec2DetailField, Mode, NavigationEntry};
 use crate::aws::ecr_model::{Image, Repository};
 use crate::aws::ecs_model::{Cluster, Service, Task};
 use crate::aws::logs_model::LogEvent;
@@ -321,7 +321,7 @@ impl Tab {
                 filtered_instances, ..
             } => {
                 if self.detail_tab == DetailTab::Overview {
-                    crate::app::Ec2DetailField::ALL.len()
+                    Ec2DetailField::ALL.len()
                 } else {
                     filtered_instances
                         .get(self.selected_index)
@@ -449,6 +449,367 @@ impl Tab {
             log_state.as_deref_mut()
         } else {
             None
+        }
+    }
+
+    /// 選択を1つ上に移動
+    pub fn move_up(&mut self) {
+        match self.tab_view {
+            TabView::List => {
+                self.selected_index = self.selected_index.saturating_sub(1);
+            }
+            TabView::Detail => {
+                self.detail_tag_index = self.detail_tag_index.saturating_sub(1);
+            }
+        }
+    }
+
+    /// 選択を1つ下に移動
+    pub fn move_down(&mut self) {
+        match self.tab_view {
+            TabView::List => {
+                let max = self.filtered_list_len().saturating_sub(1);
+                if self.selected_index < max {
+                    self.selected_index += 1;
+                }
+            }
+            TabView::Detail => {
+                let max = self.detail_list_len().saturating_sub(1);
+                if self.detail_tag_index < max {
+                    self.detail_tag_index += 1;
+                }
+            }
+        }
+    }
+
+    /// 選択を先頭に移動
+    pub fn move_to_top(&mut self) {
+        match self.tab_view {
+            TabView::List => self.selected_index = 0,
+            TabView::Detail => self.detail_tag_index = 0,
+        }
+    }
+
+    /// 選択を末尾に移動
+    pub fn move_to_bottom(&mut self) {
+        match self.tab_view {
+            TabView::List => {
+                self.selected_index = self.filtered_list_len().saturating_sub(1);
+            }
+            TabView::Detail => {
+                self.detail_tag_index = self.detail_list_len().saturating_sub(1);
+            }
+        }
+    }
+
+    /// 半ページ上に移動
+    pub fn half_page_up(&mut self) {
+        match self.tab_view {
+            TabView::List => {
+                self.selected_index = self.selected_index.saturating_sub(10);
+            }
+            TabView::Detail => {
+                self.detail_tag_index = self.detail_tag_index.saturating_sub(10);
+            }
+        }
+    }
+
+    /// 半ページ下に移動
+    pub fn half_page_down(&mut self) {
+        match self.tab_view {
+            TabView::List => {
+                let max = self.filtered_list_len().saturating_sub(1);
+                self.selected_index = (self.selected_index + 10).min(max);
+            }
+            TabView::Detail => {
+                let max = self.detail_list_len().saturating_sub(1);
+                self.detail_tag_index = (self.detail_tag_index + 10).min(max);
+            }
+        }
+    }
+
+    /// Enterキーの処理
+    pub fn handle_enter(&mut self) {
+        match self.tab_view {
+            TabView::List => {
+                if self.filtered_list_len() == 0 {
+                    return;
+                }
+                // S3: バケット選択時にselected_bucketを設定
+                if self.service == ServiceKind::S3
+                    && let ServiceData::S3 {
+                        filtered_buckets,
+                        selected_bucket,
+                        current_prefix,
+                        ..
+                    } = &mut self.data
+                    && let Some(bucket) = filtered_buckets.get(self.selected_index)
+                {
+                    *selected_bucket = Some(bucket.name.clone());
+                    current_prefix.clear();
+                }
+                self.tab_view = TabView::Detail;
+                self.reset_detail_state();
+                // EC2は詳細画面でloadingしない（リストデータから表示）
+                if self.service != ServiceKind::Ec2 {
+                    self.loading = true;
+                }
+            }
+            TabView::Detail => {
+                // ECS Detail: 3段階ナビゲーション
+                if self.service == ServiceKind::Ecs
+                    && let ServiceData::Ecs {
+                        services,
+                        selected_service_index,
+                        tasks,
+                        selected_task_index,
+                        ..
+                    } = &mut self.data
+                {
+                    if selected_service_index.is_some() {
+                        // サービス詳細 → タスク詳細
+                        if selected_task_index.is_none()
+                            && !tasks.is_empty()
+                            && self.detail_tag_index < tasks.len()
+                        {
+                            *selected_task_index = Some(self.detail_tag_index);
+                        }
+                    } else if !services.is_empty() && self.detail_tag_index < services.len() {
+                        // サービス一覧 → サービス詳細（タスク読み込みトリガー）
+                        *selected_service_index = Some(self.detail_tag_index);
+                        self.detail_tag_index = 0;
+                        self.loading = true;
+                    }
+                }
+
+                // S3 Detail: プレフィックス(ディレクトリ)の場合は中に入る
+                if self.service == ServiceKind::S3
+                    && let ServiceData::S3 {
+                        objects,
+                        current_prefix,
+                        ..
+                    } = &mut self.data
+                    && let Some(obj) = objects.get(self.detail_tag_index)
+                    && obj.is_prefix
+                {
+                    *current_prefix = obj.key.clone();
+                    self.detail_tag_index = 0;
+                    self.loading = true;
+                }
+            }
+        }
+    }
+
+    /// Backキーの処理
+    pub fn handle_back(&mut self) {
+        match self.tab_view {
+            TabView::List => {
+                // リストビューではEscは何もしない
+            }
+            TabView::Detail => {
+                // S3: プレフィックス内にいる場合は一つ上に移動
+                if self.service == ServiceKind::S3
+                    && let ServiceData::S3 {
+                        current_prefix,
+                        objects,
+                        selected_bucket,
+                        ..
+                    } = &mut self.data
+                {
+                    if !current_prefix.is_empty() {
+                        let trimmed = current_prefix.trim_end_matches('/');
+                        if let Some(pos) = trimmed.rfind('/') {
+                            *current_prefix = trimmed[..=pos].to_string();
+                        } else {
+                            current_prefix.clear();
+                        }
+                        self.detail_tag_index = 0;
+                        self.loading = true;
+                        return;
+                    }
+                    // ルートにいる場合はリストに戻る
+                    objects.clear();
+                    *selected_bucket = None;
+                }
+
+                // VPC: ナビゲーションスタックがある場合は戻る
+                if self.service == ServiceKind::Vpc {
+                    if let Some(entry) = self.navigation_stack.pop() {
+                        self.selected_index = entry.selected_index;
+                        self.detail_tag_index = entry.detail_tag_index;
+                        self.detail_tab = entry.detail_tab;
+                        if let ServiceData::Vpc { subnets, .. } = &mut self.data {
+                            subnets.clear();
+                        }
+                        return;
+                    }
+                    if let ServiceData::Vpc { subnets, .. } = &mut self.data {
+                        subnets.clear();
+                    }
+                }
+
+                // ECR: イメージをクリア
+                if self.service == ServiceKind::Ecr
+                    && let ServiceData::Ecr { images, .. } = &mut self.data
+                {
+                    images.clear();
+                }
+
+                // ECS: ログ→タスク詳細→サービス詳細→サービス一覧→クラスター一覧
+                if self.service == ServiceKind::Ecs
+                    && let ServiceData::Ecs {
+                        services,
+                        selected_service_index,
+                        tasks,
+                        selected_task_index,
+                        log_state,
+                        ..
+                    } = &mut self.data
+                {
+                    if log_state.is_some() {
+                        *log_state = None;
+                        return;
+                    }
+                    if selected_task_index.is_some() {
+                        *selected_task_index = None;
+                        return;
+                    }
+                    if selected_service_index.is_some() {
+                        *selected_service_index = None;
+                        tasks.clear();
+                        self.detail_tag_index = 0;
+                        return;
+                    }
+                    services.clear();
+                }
+
+                // Secrets: 詳細をクリア
+                if self.service == ServiceKind::SecretsManager
+                    && let ServiceData::Secrets { detail, .. } = &mut self.data
+                {
+                    *detail = None;
+                }
+
+                // EC2: ナビゲーションスタックをクリア
+                if self.service == ServiceKind::Ec2 {
+                    self.navigation_stack.clear();
+                }
+
+                self.tab_view = TabView::List;
+            }
+        }
+    }
+
+    /// 次の詳細タブに切り替え
+    pub fn switch_detail_tab(&mut self) {
+        self.detail_tag_index = 0;
+        match self.service {
+            ServiceKind::Ec2 => {
+                self.detail_tab = match self.detail_tab {
+                    DetailTab::Overview => DetailTab::Tags,
+                    DetailTab::Tags => DetailTab::Overview,
+                };
+            }
+            ServiceKind::SecretsManager => {
+                if let ServiceData::Secrets { detail_tab, .. } = &mut self.data {
+                    *detail_tab = match detail_tab {
+                        SecretsDetailTab::Overview => SecretsDetailTab::Rotation,
+                        SecretsDetailTab::Rotation => SecretsDetailTab::Versions,
+                        SecretsDetailTab::Versions => SecretsDetailTab::Tags,
+                        SecretsDetailTab::Tags => SecretsDetailTab::Overview,
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 前の詳細タブに切り替え
+    pub fn prev_detail_tab(&mut self) {
+        self.detail_tag_index = 0;
+        match self.service {
+            ServiceKind::Ec2 => {
+                self.detail_tab = match self.detail_tab {
+                    DetailTab::Overview => DetailTab::Tags,
+                    DetailTab::Tags => DetailTab::Overview,
+                };
+            }
+            ServiceKind::SecretsManager => {
+                if let ServiceData::Secrets { detail_tab, .. } = &mut self.data {
+                    *detail_tab = match detail_tab {
+                        SecretsDetailTab::Overview => SecretsDetailTab::Tags,
+                        SecretsDetailTab::Tags => SecretsDetailTab::Versions,
+                        SecretsDetailTab::Versions => SecretsDetailTab::Rotation,
+                        SecretsDetailTab::Rotation => SecretsDetailTab::Overview,
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 選択中のアイテムのIDをクリップボードにコピー
+    pub fn copy_id(&self) {
+        match (self.service, self.tab_view) {
+            (ServiceKind::Ec2, _) => {
+                if let ServiceData::Ec2 {
+                    filtered_instances, ..
+                } = &self.data
+                    && let Some(instance) = filtered_instances.get(self.selected_index)
+                {
+                    let _ = cli_clipboard::set_contents(instance.instance_id.clone());
+                }
+            }
+            (ServiceKind::Ecr, TabView::List) => {
+                if let ServiceData::Ecr {
+                    filtered_repositories,
+                    ..
+                } = &self.data
+                    && let Some(repo) = filtered_repositories.get(self.selected_index)
+                {
+                    let _ = cli_clipboard::set_contents(repo.repository_uri.clone());
+                }
+            }
+            (ServiceKind::Ecr, TabView::Detail) => {
+                if let ServiceData::Ecr { images, .. } = &self.data
+                    && let Some(image) = images.get(self.detail_tag_index)
+                {
+                    let _ = cli_clipboard::set_contents(image.image_digest.clone());
+                }
+            }
+            (ServiceKind::Vpc, TabView::List) => {
+                if let ServiceData::Vpc { filtered_vpcs, .. } = &self.data
+                    && let Some(vpc) = filtered_vpcs.get(self.selected_index)
+                {
+                    let _ = cli_clipboard::set_contents(vpc.vpc_id.clone());
+                }
+            }
+            (ServiceKind::SecretsManager, TabView::List) => {
+                if let ServiceData::Secrets {
+                    filtered_secrets, ..
+                } = &self.data
+                    && let Some(secret) = filtered_secrets.get(self.selected_index)
+                {
+                    let _ = cli_clipboard::set_contents(secret.arn.clone());
+                }
+            }
+            (ServiceKind::SecretsManager, TabView::Detail) => {
+                if let ServiceData::Secrets { detail, .. } = &self.data
+                    && let Some(d) = detail
+                {
+                    let _ = cli_clipboard::set_contents(d.arn.clone());
+                }
+            }
+            (ServiceKind::S3, TabView::List) => {
+                if let ServiceData::S3 {
+                    filtered_buckets, ..
+                } = &self.data
+                    && let Some(bucket) = filtered_buckets.get(self.selected_index)
+                {
+                    let _ = cli_clipboard::set_contents(bucket.name.clone());
+                }
+            }
+            _ => {}
         }
     }
 }
