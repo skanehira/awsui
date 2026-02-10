@@ -378,6 +378,11 @@ impl App {
         self.tabs.get_mut(self.active_tab_index)
     }
 
+    /// アクティブタブのログビュー状態への可変参照を返す
+    fn active_log_state_mut(&mut self) -> Option<&mut crate::tab::LogViewState> {
+        self.active_tab_mut()?.log_state_mut()
+    }
+
     /// TabIdからタブを検索
     pub fn find_tab(&self, tab_id: crate::tab::TabId) -> Option<&crate::tab::Tab> {
         self.tabs.iter().find(|t| t.id == tab_id)
@@ -1324,8 +1329,7 @@ impl App {
                             }
                             // 検索クエリがあればマッチを再計算
                             if !state.search_query.is_empty() {
-                                let query = state.search_query.clone();
-                                Self::recompute_search_matches(state, &query);
+                                state.recompute_search_matches();
                             }
                         }
                         tab.loading = false;
@@ -1342,80 +1346,38 @@ impl App {
     }
 
     fn log_scroll_up(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-            && let Some(state) = log_state
-        {
-            state.scroll_offset = state.scroll_offset.saturating_sub(1);
-            state.auto_scroll = false;
+        if let Some(state) = self.active_log_state_mut() {
+            state.scroll_up();
         }
     }
 
     fn log_scroll_down(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-            && let Some(state) = log_state
-        {
-            let max = state.events.len().saturating_sub(1);
-            if state.scroll_offset < max {
-                state.scroll_offset += 1;
-            }
+        if let Some(state) = self.active_log_state_mut() {
+            state.scroll_down();
         }
     }
 
     fn log_scroll_to_top(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-            && let Some(state) = log_state
-        {
-            state.scroll_offset = 0;
-            state.auto_scroll = false;
+        if let Some(state) = self.active_log_state_mut() {
+            state.scroll_to_top();
         }
     }
 
     fn log_scroll_to_bottom(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-            && let Some(state) = log_state
-        {
-            state.scroll_offset = state.events.len().saturating_sub(1);
-            state.auto_scroll = true;
+        if let Some(state) = self.active_log_state_mut() {
+            state.scroll_to_bottom();
         }
     }
 
     fn log_toggle_auto_scroll(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-            && let Some(state) = log_state
-        {
-            state.auto_scroll = !state.auto_scroll;
-            if state.auto_scroll {
-                state.scroll_offset = state.events.len().saturating_sub(1);
-            }
+        if let Some(state) = self.active_log_state_mut() {
+            state.toggle_auto_scroll();
         }
     }
 
     /// アクティブタブがログビューかどうかを判定
     fn is_in_log_view(&self) -> bool {
-        self.active_tab().is_some_and(|tab| {
-            matches!(
-                &tab.data,
-                crate::tab::ServiceData::Ecs {
-                    log_state: Some(_),
-                    ..
-                }
-            )
-        })
+        self.active_tab().is_some_and(|tab| tab.is_in_log_view())
     }
 
     /// 検索確定: filter_input の値を search_query にコピーし、マッチを計算
@@ -1426,81 +1388,20 @@ impl App {
         let query = tab.filter_input.value().to_lowercase();
         tab.mode = Mode::Normal;
 
-        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-            && let Some(state) = log_state
-        {
-            state.search_query = query.clone();
-            Self::recompute_search_matches(state, &query);
-            // 最初のマッチにジャンプ
-            if let Some(&first) = state.search_matches.first() {
-                state.current_match_index = Some(0);
-                state.scroll_offset = first;
-                state.auto_scroll = false;
-            }
+        if let Some(state) = tab.log_state_mut() {
+            state.apply_search(&query);
         }
     }
 
-    /// 検索マッチを再計算する
-    fn recompute_search_matches(state: &mut crate::tab::LogViewState, query: &str) {
-        if query.is_empty() {
-            state.search_matches.clear();
-            state.current_match_index = None;
-            return;
-        }
-        state.search_matches = state
-            .events
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.message.to_lowercase().contains(query))
-            .map(|(i, _)| i)
-            .collect();
-        if state.search_matches.is_empty() {
-            state.current_match_index = None;
-        }
-    }
-
-    /// 次の検索マッチに移動
     fn log_search_next(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-            && let Some(state) = log_state
-            && !state.search_matches.is_empty()
-        {
-            let next = match state.current_match_index {
-                Some(idx) => (idx + 1) % state.search_matches.len(),
-                None => 0,
-            };
-            state.current_match_index = Some(next);
-            state.scroll_offset = state.search_matches[next];
-            state.auto_scroll = false;
+        if let Some(state) = self.active_log_state_mut() {
+            state.search_next();
         }
     }
 
-    /// 前の検索マッチに移動
     fn log_search_prev(&mut self) {
-        let Some(tab) = self.active_tab_mut() else {
-            return;
-        };
-        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-            && let Some(state) = log_state
-            && !state.search_matches.is_empty()
-        {
-            let len = state.search_matches.len();
-            let prev = match state.current_match_index {
-                Some(idx) => {
-                    if idx == 0 {
-                        len - 1
-                    } else {
-                        idx - 1
-                    }
-                }
-                None => len - 1,
-            };
-            state.current_match_index = Some(prev);
-            state.scroll_offset = state.search_matches[prev];
-            state.auto_scroll = false;
+        if let Some(state) = self.active_log_state_mut() {
+            state.search_prev();
         }
     }
 

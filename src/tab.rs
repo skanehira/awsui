@@ -27,6 +27,103 @@ pub struct LogViewState {
     pub current_match_index: Option<usize>,
 }
 
+impl LogViewState {
+    pub fn scroll_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        self.auto_scroll = false;
+    }
+
+    pub fn scroll_down(&mut self) {
+        let max = self.events.len().saturating_sub(1);
+        if self.scroll_offset < max {
+            self.scroll_offset += 1;
+        }
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.scroll_offset = 0;
+        self.auto_scroll = false;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = self.events.len().saturating_sub(1);
+        self.auto_scroll = true;
+    }
+
+    pub fn toggle_auto_scroll(&mut self) {
+        self.auto_scroll = !self.auto_scroll;
+        if self.auto_scroll {
+            self.scroll_offset = self.events.len().saturating_sub(1);
+        }
+    }
+
+    /// 検索クエリを適用し、最初のマッチにジャンプ
+    pub fn apply_search(&mut self, query: &str) {
+        self.search_query = query.to_string();
+        self.recompute_search_matches();
+        if let Some(&first) = self.search_matches.first() {
+            self.current_match_index = Some(0);
+            self.scroll_offset = first;
+            self.auto_scroll = false;
+        }
+    }
+
+    /// 次の検索マッチに移動
+    pub fn search_next(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let next = match self.current_match_index {
+            Some(idx) => (idx + 1) % self.search_matches.len(),
+            None => 0,
+        };
+        self.current_match_index = Some(next);
+        self.scroll_offset = self.search_matches[next];
+        self.auto_scroll = false;
+    }
+
+    /// 前の検索マッチに移動
+    pub fn search_prev(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let len = self.search_matches.len();
+        let prev = match self.current_match_index {
+            Some(idx) => {
+                if idx == 0 {
+                    len - 1
+                } else {
+                    idx - 1
+                }
+            }
+            None => len - 1,
+        };
+        self.current_match_index = Some(prev);
+        self.scroll_offset = self.search_matches[prev];
+        self.auto_scroll = false;
+    }
+
+    /// 検索マッチを再計算する
+    pub fn recompute_search_matches(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_matches.clear();
+            self.current_match_index = None;
+            return;
+        }
+        let query = self.search_query.clone();
+        self.search_matches = self
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.message.to_lowercase().contains(&query))
+            .map(|(i, _)| i)
+            .collect();
+        if self.search_matches.is_empty() {
+            self.current_match_index = None;
+        }
+    }
+}
+
 /// タブの一意識別子
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(pub u32);
@@ -333,5 +430,25 @@ impl Tab {
     /// サービスデータをクリアする
     pub fn clear_data(&mut self) {
         self.data = ServiceData::new(self.service);
+    }
+
+    /// このタブがログビューかどうかを判定
+    pub fn is_in_log_view(&self) -> bool {
+        matches!(
+            &self.data,
+            ServiceData::Ecs {
+                log_state: Some(_),
+                ..
+            }
+        )
+    }
+
+    /// ログビューの状態への可変参照を取得
+    pub fn log_state_mut(&mut self) -> Option<&mut LogViewState> {
+        if let ServiceData::Ecs { log_state, .. } = &mut self.data {
+            log_state.as_deref_mut()
+        } else {
+            None
+        }
     }
 }
