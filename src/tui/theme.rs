@@ -66,3 +66,16 @@ pub fn success() -> Style {
 pub fn info() -> Style {
     Style::default().fg(Color::Cyan)
 }
+
+/// 検索マッチ（非カレント）
+pub fn search_match() -> Style {
+    Style::default().bg(Color::Yellow).fg(Color::Black)
+}
+
+/// 検索マッチ（カレント）
+pub fn search_match_current() -> Style {
+    Style::default()
+        .bg(Color::Cyan)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD)
+}

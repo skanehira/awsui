@@ -2,7 +2,8 @@ use tui_input::Input;
 
 use crate::app::{DetailTab, Mode, NavigationEntry};
 use crate::aws::ecr_model::{Image, Repository};
-use crate::aws::ecs_model::{Cluster, Service};
+use crate::aws::ecs_model::{Cluster, Service, Task};
+use crate::aws::logs_model::LogEvent;
 use crate::aws::model::Instance;
 use crate::aws::s3_model::{Bucket, S3Object};
 use crate::aws::secrets_model::{Secret, SecretDetail};
@@ -10,6 +11,21 @@ use crate::aws::vpc_model::{Subnet, Vpc};
 use crate::fuzzy::fuzzy_filter_items;
 use crate::service::ServiceKind;
 use crate::tui::views::secrets_detail::SecretsDetailTab;
+
+/// ログビューの状態
+#[derive(Debug, Clone)]
+pub struct LogViewState {
+    pub container_name: String,
+    pub log_group: String,
+    pub log_stream: String,
+    pub events: Vec<LogEvent>,
+    pub next_forward_token: Option<String>,
+    pub auto_scroll: bool,
+    pub scroll_offset: usize,
+    pub search_query: String,
+    pub search_matches: Vec<usize>,
+    pub current_match_index: Option<usize>,
+}
 
 /// タブの一意識別子
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,6 +54,10 @@ pub enum ServiceData {
         clusters: Vec<Cluster>,
         filtered_clusters: Vec<Cluster>,
         services: Vec<Service>,
+        selected_service_index: Option<usize>,
+        tasks: Vec<Task>,
+        selected_task_index: Option<usize>,
+        log_state: Option<LogViewState>,
     },
     S3 {
         buckets: Vec<Bucket>,
@@ -76,6 +96,10 @@ impl ServiceData {
                 clusters: Vec::new(),
                 filtered_clusters: Vec::new(),
                 services: Vec::new(),
+                selected_service_index: None,
+                tasks: Vec::new(),
+                selected_task_index: None,
+                log_state: None,
             },
             ServiceKind::S3 => ServiceData::S3 {
                 buckets: Vec::new(),
@@ -159,6 +183,15 @@ impl Tab {
             *detail_tab = SecretsDetailTab::Overview;
             *value_visible = false;
         }
+        if let ServiceData::Ecs {
+            selected_service_index,
+            selected_task_index,
+            ..
+        } = &mut self.data
+        {
+            *selected_service_index = None;
+            *selected_task_index = None;
+        }
     }
 
     /// 現在のリストビューのフィルタ済みリスト長を返す
@@ -200,7 +233,21 @@ impl Tab {
                 }
             }
             ServiceData::Ecr { images, .. } => images.len(),
-            ServiceData::Ecs { services, .. } => services.len(),
+            ServiceData::Ecs {
+                services,
+                selected_service_index,
+                tasks,
+                selected_task_index,
+                ..
+            } => {
+                if selected_task_index.is_some() {
+                    0 // タスク詳細はスクロール不要
+                } else if selected_service_index.is_some() {
+                    tasks.len() // サービス詳細 → タスク一覧
+                } else {
+                    services.len() // クラスター詳細 → サービス一覧
+                }
+            }
             ServiceData::S3 { objects, .. } => objects.len(),
             ServiceData::Vpc { subnets, .. } => subnets.len(),
             ServiceData::Secrets {

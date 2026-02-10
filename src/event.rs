@@ -1,5 +1,6 @@
 use crate::aws::ecr_model::{Image, Repository};
-use crate::aws::ecs_model::{Cluster, Service};
+use crate::aws::ecs_model::{Cluster, ContainerLogConfig, Service, Task};
+use crate::aws::logs_model::LogEvent;
 use crate::aws::model::Instance;
 use crate::aws::s3_model::{Bucket, S3Object};
 use crate::aws::secrets_model::{Secret, SecretDetail};
@@ -28,6 +29,9 @@ pub enum TabEvent {
     /// ECSサービス一覧の読み込み完了
     EcsServicesLoaded(Result<Vec<Service>, AppError>),
 
+    /// ECSタスク一覧の読み込み完了
+    EcsTasksLoaded(Result<Vec<Task>, AppError>),
+
     /// S3バケット一覧の読み込み完了
     BucketsLoaded(Result<Vec<Bucket>, AppError>),
 
@@ -51,6 +55,12 @@ pub enum TabEvent {
 
     /// ナビゲーションリンク先のVPCデータ読み込み完了
     NavigateVpcLoaded(Result<(Vec<Vpc>, Vec<Subnet>), AppError>),
+
+    /// ECSタスク定義のログ設定読み込み完了
+    EcsLogConfigsLoaded(Result<Vec<ContainerLogConfig>, AppError>),
+
+    /// ECSログイベント読み込み完了
+    EcsLogEventsLoaded(Result<(Vec<LogEvent>, Option<String>), AppError>),
 }
 
 /// バックグラウンドタスクからUIスレッドへ送信されるイベント。

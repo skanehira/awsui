@@ -4,21 +4,21 @@ expression: buffer_to_string(&terminal)
 ---
 ┌ web-cluster ───────────────────────────────────────────────────────────────────────────────────────────────┐
 │┌ Cluster Info ────────────────────────────────────────────────────────────────────────────────────────────┐│
+││  ARN             arn:aws:ecs:ap-northeast-1:123456789012:cluster/web-cluster                             ││
 ││  Status          ACTIVE                                                                                  ││
+││  Active Services 3                                                                                       ││
+││  Instances       4                                                                                       ││
 ││  Running Tasks   10                                                                                      ││
 ││  Pending Tasks   2                                                                                       ││
 │└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘│
-│Service Name         Status     Desired   Running   Pending   Task Definition                Launch Type    │
-│api-service          ACTIVE     3         3         0         arn:aws:ecs:ap-northeast-1:123 FARGATE        │
-│worker-service       ACTIVE     2         1         0         arn:aws:ecs:ap-northeast-1:123 FARGATE        │
-│cron-service         DRAINING   1         0         0         arn:aws:ecs:ap-northeast-1:123 FARGATE        │
-│                                                                                                            │
-│                                                                                                            │
-│                                                                                                            │
+│Service Name         Status     Tasks        Launch Type  Task Definition                Scheduling         │
+│api-service          ACTIVE     3/3          FARGATE      arn:aws:ecs:ap-northeast-1:123 REPLICA            │
+│worker-service       ACTIVE     1/2          FARGATE      arn:aws:ecs:ap-northeast-1:123 REPLICA            │
+│cron-service         DRAINING   0/1          FARGATE      arn:aws:ecs:ap-northeast-1:123 REPLICA            │
 │                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- j/k:move Esc:back ?:help
+ j/k:move Enter:detail Esc:back ?:help

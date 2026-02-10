@@ -1,0 +1,29 @@
+---
+source: src/tui/views/ecs_task_detail.rs
+expression: buffer_to_string(&terminal)
+---
+┌ abc123def456 ──────────────────────────────────────────────────────────────────────────┐
+│┌ Task Overview ───────────────────────────────────────────────────────────────────────┐│
+││  Status            RUNNING                                                           ││
+││  Desired           RUNNING                                                           ││
+││  Health            HEALTHY                                                           ││
+││  Task Definition   arn:aws:ecs:ap-northeast-1:123456789012:task-definition/my-task:1 ││
+││  Launch Type       FARGATE                                                           ││
+││  CPU / Memory      256 / 512                                                         ││
+││  Platform          1.4.0                                                             ││
+││  AZ                ap-northeast-1a                                                   ││
+││  Started           2026-02-04T20:07:00Z                                              ││
+││  Task ARN                                                                            ││
+││arn:aws:ecs:ap-northeast-1:123456789012:task/web-cluster/abc123def456                 ││
+│└──────────────────────────────────────────────────────────────────────────────────────┘│
+│┌ Containers ──────────────────────────────────────────────────────────────────────────┐│
+││Name            Image                     Status     Exit   Health                    ││
+││app             nginx:latest              RUNNING    -      HEALTHY                   ││
+││sidecar         envoy:v1.28               RUNNING    -      -                         ││
+││                                                                                      ││
+││                                                                                      ││
+││                                                                                      ││
+││                                                                                      ││
+│└──────────────────────────────────────────────────────────────────────────────────────┘│
+└────────────────────────────────────────────────────────────────────────────────────────┘
+ Esc:back ?:help

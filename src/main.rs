@@ -5,6 +5,7 @@ use awsui::app::{App, ConfirmAction, Mode, View};
 use awsui::aws::client::{AwsEc2Client, Ec2Client};
 use awsui::aws::ecr_client::{AwsEcrClient, EcrClient};
 use awsui::aws::ecs_client::{AwsEcsClient, EcsClient};
+use awsui::aws::logs_client::{AwsLogsClient, LogsClient};
 use awsui::aws::s3_client::{AwsS3Client, S3Client};
 use awsui::aws::secrets_client::{AwsSecretsClient, SecretsClient};
 use awsui::aws::vpc_client::{AwsVpcClient, VpcClient};
@@ -30,6 +31,7 @@ struct Clients {
     s3: Option<Arc<dyn S3Client>>,
     vpc: Option<Arc<dyn VpcClient>>,
     secrets: Option<Arc<dyn SecretsClient>>,
+    logs: Option<Arc<dyn LogsClient>>,
 }
 
 impl Clients {
@@ -41,6 +43,7 @@ impl Clients {
             s3: None,
             vpc: None,
             secrets: None,
+            logs: None,
         }
     }
 
@@ -51,6 +54,7 @@ impl Clients {
         self.s3 = None;
         self.vpc = None;
         self.secrets = None;
+        self.logs = None;
     }
 }
 
@@ -110,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
     let mut render_interval = tokio::time::interval(std::time::Duration::from_millis(16));
     let mut clients = Clients::new();
     let mut spinner_tick: usize = 0;
+    let mut log_poll_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
         tokio::select! {
@@ -126,6 +131,19 @@ async fn main() -> anyhow::Result<()> {
                 if needs_crud_refresh {
                     trigger_refresh(&app, &clients);
                 }
+                // ログ初回取得（EcsLogConfigsLoaded後にlog_stateが設定されloading=trueの場合）
+                if let Some(tab) = app.active_tab()
+                    && tab.loading
+                    && let awsui::tab::ServiceData::Ecs { log_state: Some(state), .. } = &tab.data
+                {
+                    let log_group = state.log_group.clone();
+                    let log_stream = state.log_stream.clone();
+                    let next_token = state.next_forward_token.clone();
+                    let tid = tab.id;
+                    fetch_log_events(&mut app, &mut clients, tid, &log_group, &log_stream, next_token).await;
+                }
+                // ログイベント受信後にポーリング継続を管理
+                manage_log_polling(&app, &clients, &mut log_poll_handle);
             }
             maybe_event = futures::StreamExt::next(&mut event_stream) => {
                 if let Some(Ok(crossterm::event::Event::Key(key))) = maybe_event
@@ -134,9 +152,13 @@ async fn main() -> anyhow::Result<()> {
                     let prev_view = app.current_view();
                     let prev_tab_id = app.active_tab().map(|t| t.id);
                     let action = awsui::tui::input::handle_key(&app, key);
+                    let action_clone = action.clone();
                     let confirmed = app.dispatch(action);
 
-                    handle_side_effects(&mut app, &mut clients, confirmed, &prev_view, prev_tab_id).await;
+                    handle_side_effects(&mut app, &mut clients, confirmed, &prev_view, prev_tab_id, &action_clone).await;
+
+                    // ログポーリング管理
+                    manage_log_polling(&app, &clients, &mut log_poll_handle);
                 }
             }
             _ = render_interval.tick() => {
@@ -284,6 +306,7 @@ fn render_tab_content(
                     &tab.filter_input,
                     &tab.mode,
                     tab.loading,
+                    spinner_tick,
                     area,
                 );
             }
@@ -292,18 +315,47 @@ fn render_tab_content(
             if let awsui::tab::ServiceData::Ecs {
                 filtered_clusters,
                 services,
+                selected_service_index,
+                tasks,
+                selected_task_index,
+                log_state,
                 ..
             } = &tab.data
                 && let Some(cluster) = filtered_clusters.get(tab.selected_index)
             {
-                awsui::tui::views::ecs_detail::render(
-                    frame,
-                    cluster,
-                    services,
-                    tab.detail_tag_index,
-                    tab.loading,
-                    area,
-                );
+                // ログビュー表示中
+                if let Some(log_state) = log_state {
+                    awsui::tui::views::ecs_log::render(frame, log_state, tab.loading, spinner_tick, &tab.mode, tab.filter_input.value(), area);
+                } else if let Some(task_idx) = selected_task_index
+                    && let Some(task) = tasks.get(*task_idx)
+                {
+                    // タスク詳細
+                    awsui::tui::views::ecs_task_detail::render(frame, task, area);
+                } else if let Some(svc_idx) = selected_service_index
+                    && let Some(service) = services.get(*svc_idx)
+                {
+                    // サービス詳細（タスク一覧付き）
+                    awsui::tui::views::ecs_service_detail::render(
+                        frame,
+                        service,
+                        tasks,
+                        tab.detail_tag_index,
+                        tab.loading,
+                        spinner_tick,
+                        area,
+                    );
+                } else {
+                    // クラスター詳細（サービス一覧）
+                    awsui::tui::views::ecs_detail::render(
+                        frame,
+                        cluster,
+                        services,
+                        tab.detail_tag_index,
+                        tab.loading,
+                        spinner_tick,
+                        area,
+                    );
+                }
             }
         }
         Some(View::S3List) => {
@@ -444,6 +496,23 @@ fn render_tab_overlays(frame: &mut Frame, tab: &awsui::tab::Tab) {
             let dialog = DangerConfirmDialog::new(ctx);
             frame.render_widget(dialog, frame.area());
         }
+        Mode::ContainerSelect { names, selected } => {
+            let popup = awsui::tui::components::dialog::centered_rect(
+                50,
+                (names.len() as u16 + 5).min(20),
+                frame.area(),
+            );
+            frame.render_widget(ratatui::widgets::Clear, popup);
+            let block = ratatui::widgets::Block::default()
+                .title(" Select Container ")
+                .borders(ratatui::widgets::Borders::ALL)
+                .style(awsui::tui::theme::active());
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            let selector =
+                awsui::tui::components::list_selector::ListSelector::new("", names, *selected);
+            frame.render_widget(selector, inner);
+        }
         _ => {}
     }
 }
@@ -486,6 +555,7 @@ async fn handle_side_effects(
     confirmed: Option<ConfirmAction>,
     prev_view: &Option<View>,
     prev_tab_id: Option<TabId>,
+    action_clone: &awsui::action::Action,
 ) {
     let current_view = app.current_view();
 
@@ -504,6 +574,25 @@ async fn handle_side_effects(
         .active_tab()
         .map(|t| t.tab_view)
         .unwrap_or(awsui::tab::TabView::List);
+
+    // ShowLogs → タスク定義のログ設定取得（他の早期リターンより先に処理）
+    if matches!(action_clone, awsui::action::Action::ShowLogs) && tab_loading {
+        load_ecs_log_configs(app, clients, tab_id);
+        return;
+    }
+
+    // ログ初回取得（log_stateがありloading=trueの場合、ContainerSelectConfirm後など）
+    if tab_loading
+        && let Some(tab) = app.find_tab(tab_id)
+        && let awsui::tab::ServiceData::Ecs { log_state: Some(state), .. } = &tab.data
+    {
+        let log_group = state.log_group.clone();
+        let log_stream = state.log_stream.clone();
+        let next_token = state.next_forward_token.clone();
+        fetch_log_events(app, clients, tab_id, &log_group, &log_stream, next_token)
+            .await;
+        return;
+    }
 
     // 新しいタブが作成された場合 → クライアント作成 + データ読み込み
     // - prev_view.is_none(): 最初のタブ
@@ -526,6 +615,12 @@ async fn handle_side_effects(
 
         if was_list {
             load_detail_data(app, clients, tab_id);
+            return;
+        }
+
+        // ECSタスク読み込み（サービス詳細遷移時）
+        if was_same_detail && matches!(current_view, Some(View::EcsDetail)) {
+            load_ecs_tasks(app, clients, tab_id);
             return;
         }
 
@@ -617,6 +712,7 @@ async fn handle_side_effects(
     if let Some(danger_action) = app.pending_danger_action.take() {
         handle_danger_side_effect(app, clients, danger_action, tab_id);
     }
+
 }
 
 async fn create_client_and_load(app: &mut App, clients: &mut Clients, tab_id: TabId) {
@@ -877,6 +973,37 @@ fn load_secret_value(app: &App, clients: &Clients, tab_id: TabId) {
                 .send(AppEvent::TabEvent(
                     tab_id,
                     TabEvent::SecretValueLoaded(result),
+                ))
+                .await;
+        });
+    }
+}
+
+fn load_ecs_tasks(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::Ecs {
+        filtered_clusters,
+        services,
+        selected_service_index,
+        ..
+    } = &tab.data
+        && let Some(svc_idx) = selected_service_index
+        && let Some(service) = services.get(*svc_idx)
+        && let Some(cluster) = filtered_clusters.get(tab.selected_index)
+        && let Some(client) = &clients.ecs
+    {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let cluster_arn = cluster.cluster_arn.clone();
+        let service_name = service.service_name.clone();
+        tokio::spawn(async move {
+            let result = c.list_tasks(&cluster_arn, &service_name).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::EcsTasksLoaded(result),
                 ))
                 .await;
         });
@@ -1348,4 +1475,148 @@ fn is_detail_view(view: &View) -> bool {
             | View::VpcDetail
             | View::SecretsDetail
     )
+}
+
+/// ECSタスク定義のログ設定を取得する
+fn load_ecs_log_configs(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::Ecs {
+        tasks,
+        selected_task_index,
+        ..
+    } = &tab.data
+        && let Some(task_idx) = selected_task_index
+        && let Some(task) = tasks.get(*task_idx)
+        && let Some(client) = &clients.ecs
+    {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let task_def_arn = task.task_definition_arn.clone();
+        tokio::spawn(async move {
+            let result = c.describe_task_definition_log_configs(&task_def_arn).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::EcsLogConfigsLoaded(result),
+                ))
+                .await;
+        });
+    }
+}
+
+/// CloudWatch Logsからログイベントを取得する
+async fn fetch_log_events(
+    app: &mut App,
+    clients: &mut Clients,
+    tab_id: TabId,
+    log_group: &str,
+    log_stream: &str,
+    next_token: Option<String>,
+) {
+    // Logsクライアントがない場合は作成
+    if clients.logs.is_none() {
+        let Some(profile_name) = &app.profile else {
+            return;
+        };
+        let region = app
+            .region
+            .clone()
+            .unwrap_or_else(|| "ap-northeast-1".to_string());
+        match AwsLogsClient::new(profile_name, &region).await {
+            Ok(client) => {
+                clients.logs = Some(Arc::new(client));
+            }
+            Err(e) => {
+                if let Some(tab) = app.find_tab_mut(tab_id) {
+                    tab.loading = false;
+                }
+                app.show_message(awsui::app::MessageLevel::Error, "Error", e.to_string());
+                return;
+            }
+        }
+    }
+
+    if let Some(client) = &clients.logs {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let group = log_group.to_string();
+        let stream = log_stream.to_string();
+        tokio::spawn(async move {
+            let result = c.get_log_events(&group, &stream, next_token).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::EcsLogEventsLoaded(result),
+                ))
+                .await;
+        });
+    }
+}
+
+/// ログポーリングを管理する（ログビュー表示中は2秒間隔でポーリング、非表示時は停止）
+fn manage_log_polling(
+    app: &App,
+    clients: &Clients,
+    log_poll_handle: &mut Option<tokio::task::JoinHandle<()>>,
+) {
+    let should_poll = app.active_tab().is_some_and(|tab| {
+        if let awsui::tab::ServiceData::Ecs { log_state, .. } = &tab.data {
+            log_state.is_some() && !tab.loading
+        } else {
+            false
+        }
+    });
+
+    if should_poll {
+        // 既にポーリング中なら何もしない
+        if log_poll_handle
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
+        {
+            return;
+        }
+
+        // ログ情報を取得
+        let Some(tab) = app.active_tab() else {
+            return;
+        };
+        let tab_id = tab.id;
+        let Some((log_group, log_stream, next_token)) = (|| {
+            if let awsui::tab::ServiceData::Ecs { log_state: Some(state), .. } = &tab.data {
+                return Some((
+                    state.log_group.clone(),
+                    state.log_stream.clone(),
+                    state.next_forward_token.clone(),
+                ));
+            }
+            None
+        })() else {
+            return;
+        };
+
+        let Some(client) = clients.logs.clone() else {
+            return;
+        };
+        let tx = app.event_tx.clone();
+
+        *log_poll_handle = Some(tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let result = client
+                .get_log_events(&log_group, &log_stream, next_token)
+                .await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::EcsLogEventsLoaded(result),
+                ))
+                .await;
+        }));
+    } else {
+        // ログビューでなくなったらポーリング停止
+        if let Some(handle) = log_poll_handle.take() {
+            handle.abort();
+        }
+    }
 }

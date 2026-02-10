@@ -52,5 +52,19 @@ pub enum Action {
     PickerMoveUp,
     PickerMoveDown,
     PickerHandleInput(InputRequest),
+    /// ログ操作
+    ShowLogs,
+    LogScrollUp,
+    LogScrollDown,
+    LogScrollToTop,
+    LogScrollToBottom,
+    LogToggleAutoScroll,
+    LogSearchNext,
+    LogSearchPrev,
+    /// コンテナ選択操作
+    ContainerSelectUp,
+    ContainerSelectDown,
+    ContainerSelectConfirm,
+    ContainerSelectCancel,
     Noop,
 }

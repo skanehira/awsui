@@ -38,6 +38,7 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
         Mode::Confirm(_) => return handle_confirm_key(key),
         Mode::Form(_) => return handle_form_key(key),
         Mode::DangerConfirm(_) => return handle_danger_confirm_key(key),
+        Mode::ContainerSelect { .. } => return handle_container_select_key(key),
         _ => {}
     }
 
@@ -83,7 +84,19 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
             _ => handle_secrets_list_key(key),
         },
         View::Ec2Detail => handle_ec2_detail_key(key),
-        View::EcrDetail | View::EcsDetail | View::VpcDetail => handle_generic_detail_key(key),
+        View::EcrDetail | View::VpcDetail => handle_generic_detail_key(key),
+        View::EcsDetail => {
+            // ログビュー表示中は専用ハンドラー
+            if let crate::tab::ServiceData::Ecs { log_state, .. } = &tab.data
+                && log_state.is_some()
+            {
+                return match mode {
+                    Mode::Filter => handle_filter_key(key),
+                    _ => handle_ecs_log_key(key),
+                };
+            }
+            handle_ecs_detail_key(key)
+        }
         View::S3Detail => handle_s3_detail_key(key),
         View::SecretsDetail => handle_secrets_detail_key(key),
     }
@@ -288,7 +301,58 @@ fn handle_ec2_detail_key(key: KeyEvent) -> Action {
     }
 }
 
-/// 汎用詳細画面のキー処理 (ECR Detail, ECS Detail, VPC Detail)
+/// ECS詳細画面のキー処理（サービス一覧 + サービス詳細）
+fn handle_ecs_detail_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('[') => Action::PrevDetailTab,
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Enter => Action::Enter,
+        KeyCode::Char('l') => Action::ShowLogs,
+        KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// ECSログビューのキー処理
+fn handle_ecs_log_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::LogScrollDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::LogScrollUp,
+        KeyCode::Char('g') => Action::LogScrollToTop,
+        KeyCode::Char('G') => Action::LogScrollToBottom,
+        KeyCode::Char('f') => Action::LogToggleAutoScroll,
+        KeyCode::Char('/') => Action::StartFilter,
+        KeyCode::Char('n') => Action::LogSearchNext,
+        KeyCode::Char('N') => Action::LogSearchPrev,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// コンテナ選択ダイアログのキー処理
+fn handle_container_select_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::ContainerSelectDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::ContainerSelectUp,
+        KeyCode::Enter => Action::ContainerSelectConfirm,
+        KeyCode::Esc => Action::ContainerSelectCancel,
+        _ => Action::Noop,
+    }
+}
+
+/// 汎用詳細画面のキー処理 (ECR Detail, VPC Detail)
 fn handle_generic_detail_key(key: KeyEvent) -> Action {
     if is_quit_key(&key) {
         return Action::Quit;
@@ -598,6 +662,31 @@ mod tests {
         #[case] expected: Action,
     ) {
         let app = app_with_view(View::Ec2Detail);
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    // ──────────────────────────────────────────────
+    // ECS詳細画面テスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key(KeyCode::Down), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key(KeyCode::Up), Action::MoveUp)]
+    #[case(key_char('g'), Action::MoveToTop)]
+    #[case(key_char('G'), Action::MoveToBottom)]
+    #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key_char('y'), Action::CopyId)]
+    #[case(key_char('?'), Action::ShowHelp)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    #[case(key_char('x'), Action::Noop)]
+    fn handle_key_returns_expected_action_when_ecs_detail(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_view(View::EcsDetail);
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -1037,5 +1126,84 @@ mod tests {
         let app = app_with_picker();
         let action = handle_key(&app, key_char('s'));
         assert!(matches!(action, Action::PickerHandleInput(_)));
+    }
+
+    // ──────────────────────────────────────────────
+    // ECSログビューテスト
+    // ──────────────────────────────────────────────
+
+    fn app_with_ecs_log_view() -> App {
+        use crate::aws::logs_model::LogEvent;
+        use crate::tab::LogViewState;
+
+        let mut app = app_with_view(View::EcsDetail);
+        if let Some(tab) = app.active_tab_mut() {
+            if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data {
+                *log_state = Some(LogViewState {
+                    container_name: "app".to_string(),
+                    log_group: "/ecs/svc".to_string(),
+                    log_stream: "ecs/app/abc".to_string(),
+                    events: vec![LogEvent {
+                        timestamp: 0,
+                        formatted_time: "".to_string(),
+                        message: "test".to_string(),
+                    }],
+                    next_forward_token: None,
+                    auto_scroll: true,
+                    scroll_offset: 0,
+                    search_query: String::new(),
+                    search_matches: Vec::new(),
+                    current_match_index: None,
+                });
+            }
+        }
+        app
+    }
+
+    #[rstest]
+    #[case(key_char('j'), Action::LogScrollDown)]
+    #[case(key(KeyCode::Down), Action::LogScrollDown)]
+    #[case(key_char('k'), Action::LogScrollUp)]
+    #[case(key(KeyCode::Up), Action::LogScrollUp)]
+    #[case(key_char('g'), Action::LogScrollToTop)]
+    #[case(key_char('G'), Action::LogScrollToBottom)]
+    #[case(key_char('f'), Action::LogToggleAutoScroll)]
+    #[case(key_char('/'), Action::StartFilter)]
+    #[case(key_char('n'), Action::LogSearchNext)]
+    #[case(key_char('N'), Action::LogSearchPrev)]
+    #[case(key_char('?'), Action::ShowHelp)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    #[case(key_char('x'), Action::Noop)]
+    fn handle_key_returns_expected_action_when_ecs_log_view(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_ecs_log_view();
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    #[rstest]
+    #[case(key(KeyCode::Enter), Action::ConfirmFilter)]
+    #[case(key(KeyCode::Esc), Action::CancelFilter)]
+    fn handle_key_returns_expected_action_when_ecs_log_filter(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let mut app = app_with_ecs_log_view();
+        if let Some(tab) = app.active_tab_mut() {
+            tab.mode = Mode::Filter;
+        }
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    #[test]
+    fn handle_key_returns_filter_handle_input_when_char_in_ecs_log_filter() {
+        let mut app = app_with_ecs_log_view();
+        if let Some(tab) = app.active_tab_mut() {
+            tab.mode = Mode::Filter;
+        }
+        let action = handle_key(&app, key_char('a'));
+        assert!(matches!(action, Action::FilterHandleInput(_)));
     }
 }

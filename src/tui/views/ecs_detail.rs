@@ -16,6 +16,7 @@ pub fn render(
     services: &[Service],
     selected_index: usize,
     loading: bool,
+    spinner_tick: usize,
     area: Rect,
 ) {
     let outer_chunks = Layout::vertical([
@@ -31,7 +32,7 @@ pub fn render(
 
     // 内側レイアウト: クラスタ概要 + サービス一覧
     let inner_chunks = Layout::vertical([
-        Constraint::Length(5), // クラスタ概要
+        Constraint::Length(8), // クラスタ概要
         Constraint::Min(1),    // サービステーブル
     ])
     .split(inner);
@@ -39,14 +40,14 @@ pub fn render(
     render_cluster_overview(frame, cluster, inner_chunks[0]);
 
     if loading {
-        let loading_widget = Loading::new("Loading services...", 0);
+        let loading_widget = Loading::new("Loading services...", spinner_tick);
         frame.render_widget(loading_widget, inner_chunks[1]);
     } else {
         render_services_table(frame, services, selected_index, inner_chunks[1]);
     }
 
     // ステータスバー
-    let keybinds = "j/k:move Esc:back ?:help";
+    let keybinds = "j/k:move Enter:detail Esc:back ?:help";
     let status = StatusBar::new(keybinds);
     frame.render_widget(status, outer_chunks[1]);
 }
@@ -56,10 +57,15 @@ fn render_cluster_overview(frame: &mut Frame, cluster: &Cluster, area: Rect) {
     let overview_block = Block::default()
         .title(" Cluster Info ")
         .borders(Borders::ALL);
+    let active_services = cluster.active_services_count.to_string();
+    let container_instances = cluster.registered_container_instances_count.to_string();
     let running = cluster.running_tasks_count.to_string();
     let pending = cluster.pending_tasks_count.to_string();
     let lines = vec![
+        detail_line("ARN", &cluster.cluster_arn),
         detail_line("Status", &cluster.status),
+        detail_line("Active Services", &active_services),
+        detail_line("Instances", &container_instances),
         detail_line("Running Tasks", &running),
         detail_line("Pending Tasks", &pending),
     ];
@@ -79,11 +85,10 @@ fn render_services_table(
     let headers = Row::new(vec![
         "Service Name",
         "Status",
-        "Desired",
-        "Running",
-        "Pending",
-        "Task Definition",
+        "Tasks",
         "Launch Type",
+        "Task Definition",
+        "Scheduling",
     ])
     .style(theme::header());
 
@@ -92,11 +97,10 @@ fn render_services_table(
     let widths = vec![
         Constraint::Length(20),
         Constraint::Length(10),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(9),
+        Constraint::Length(12),
+        Constraint::Length(12),
         Constraint::Length(30),
-        Constraint::Min(12),
+        Constraint::Min(10),
     ];
 
     let table = SelectableTable::new(headers, rows, widths);
@@ -113,14 +117,15 @@ fn service_to_row(service: &Service) -> Row<'_> {
         _ => theme::state_transitioning(),
     };
 
+    let tasks = format!("{}/{}", service.running_count, service.desired_count);
+
     Row::new(vec![
         Line::from(service.service_name.as_str()),
         Line::from(Span::styled(service.status.as_str(), status_style)),
-        Line::from(service.desired_count.to_string()),
-        Line::from(service.running_count.to_string()),
-        Line::from(service.pending_count.to_string()),
-        Line::from(service.task_definition.as_str()),
+        Line::from(tasks),
         Line::from(service.launch_type.as_deref().unwrap_or("-")),
+        Line::from(service.task_definition.as_str()),
+        Line::from(service.scheduling_strategy.as_deref().unwrap_or("-")),
     ])
 }
 
@@ -177,6 +182,10 @@ mod tests {
             task_definition: "arn:aws:ecs:ap-northeast-1:123456789012:task-definition/my-task:1"
                 .to_string(),
             launch_type: Some("FARGATE".to_string()),
+            scheduling_strategy: Some("REPLICA".to_string()),
+            created_at: Some("2026-02-04T20:07:00Z".to_string()),
+            health_check_grace_period_seconds: Some(0),
+            deployment_status: Some("COMPLETED".to_string()),
         }
     }
 
@@ -188,7 +197,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -203,7 +212,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -220,16 +229,15 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("Service Name"));
-        assert!(content.contains("Desired"));
-        assert!(content.contains("Running"));
-        assert!(content.contains("Pending"));
-        assert!(content.contains("Task Definition"));
+        assert!(content.contains("Tasks"));
         assert!(content.contains("Launch Type"));
+        assert!(content.contains("Task Definition"));
+        assert!(content.contains("Scheduling"));
     }
 
     #[test]
@@ -243,7 +251,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -260,7 +268,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, true, frame.area()))
+            .draw(|frame| render(frame, &cluster, &services, 0, true, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -275,11 +283,12 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, 0, frame.area()))
             .unwrap();
 
         let content = buffer_to_string(&terminal);
         assert!(content.contains("j/k:move"));
+        assert!(content.contains("Enter:detail"));
         assert!(content.contains("Esc:back"));
     }
 
@@ -295,7 +304,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &cluster, &services, 0, false, frame.area()))
+            .draw(|frame| render(frame, &cluster, &services, 0, false, 0, frame.area()))
             .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));

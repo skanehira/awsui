@@ -19,6 +19,7 @@ pub fn render(
     filter_input: &Input,
     mode: &Mode,
     loading: bool,
+    spinner_tick: usize,
     area: Rect,
 ) {
     let outer_chunks = Layout::vertical([
@@ -33,7 +34,7 @@ pub fn render(
     frame.render_widget(outer_block, outer_chunks[0]);
 
     if loading {
-        let loading_widget = Loading::new("Loading clusters...", 0);
+        let loading_widget = Loading::new("Loading clusters...", spinner_tick);
         frame.render_widget(loading_widget, inner);
     } else {
         render_table(frame, clusters, selected_index, inner);
@@ -141,6 +142,7 @@ mod tests {
                     &input,
                     &Mode::Normal,
                     false,
+                    0,
                     frame.area(),
                 )
             })
@@ -166,6 +168,7 @@ mod tests {
                     &input,
                     &Mode::Normal,
                     false,
+                    0,
                     frame.area(),
                 )
             })
@@ -199,6 +202,7 @@ mod tests {
                     &input,
                     &Mode::Normal,
                     false,
+                    0,
                     frame.area(),
                 )
             })
@@ -226,6 +230,7 @@ mod tests {
                     &input,
                     &Mode::Normal,
                     true,
+                    0,
                     frame.area(),
                 )
             })
@@ -251,6 +256,7 @@ mod tests {
                     &input,
                     &Mode::Filter,
                     false,
+                    0,
                     frame.area(),
                 )
             })
@@ -276,6 +282,7 @@ mod tests {
                     &input,
                     &Mode::Normal,
                     false,
+                    0,
                     frame.area(),
                 )
             })
@@ -305,6 +312,7 @@ mod tests {
                     &input,
                     &Mode::Normal,
                     false,
+                    0,
                     frame.area(),
                 )
             })

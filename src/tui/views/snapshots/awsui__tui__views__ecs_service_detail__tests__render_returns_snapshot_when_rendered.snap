@@ -1,0 +1,29 @@
+---
+source: src/tui/views/ecs_service_detail.rs
+expression: buffer_to_string(&terminal)
+---
+┌ api-service ───────────────────────────────────────────────────────────────────────────┐
+│┌ Service Overview ────────────────────────────────────────────────────────────────────┐│
+││  Status            ACTIVE                                                            ││
+││  Tasks             0 pending | 3 running / 3 desired                                 ││
+││  Task Definition   arn:aws:ecs:ap-northeast-1:123456789012:task-definition/my-task:1 ││
+││  Deploy Status     COMPLETED                                                         ││
+││  Launch Type       FARGATE                                                           ││
+││  Scheduling        REPLICA                                                           ││
+││  Created           2026-02-04T20:07:00Z                                              ││
+││  Health Check      0 seconds                                                         ││
+││  Service ARN                                                                         ││
+││arn:aws:ecs:ap-northeast-1:123456789012:service/web-cluster/api-service               ││
+││  Cluster ARN       arn:aws:ecs:ap-northeast-1:123456789012:cluster/web-cluster       ││
+││                                                                                      ││
+│└──────────────────────────────────────────────────────────────────────────────────────┘│
+│Task ID        Status     Desired    Health     Launch Type  Started At                 │
+│abc123def456   RUNNING    RUNNING    HEALTHY    FARGATE      2026-02-04T20:07:00Z       │
+│ghi789jkl012   RUNNING    RUNNING    -          FARGATE      2026-02-04T20:07:00Z       │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Enter:detail Esc:back ?:help
