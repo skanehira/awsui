@@ -57,7 +57,7 @@ pub enum ServiceData {
         selected_service_index: Option<usize>,
         tasks: Vec<Task>,
         selected_task_index: Option<usize>,
-        log_state: Option<LogViewState>,
+        log_state: Option<Box<LogViewState>>,
     },
     S3 {
         buckets: Vec<Bucket>,

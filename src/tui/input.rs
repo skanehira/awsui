@@ -1139,7 +1139,7 @@ mod tests {
         let mut app = app_with_view(View::EcsDetail);
         if let Some(tab) = app.active_tab_mut() {
             if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data {
-                *log_state = Some(LogViewState {
+                *log_state = Some(Box::new(LogViewState {
                     container_name: "app".to_string(),
                     log_group: "/ecs/svc".to_string(),
                     log_stream: "ecs/app/abc".to_string(),
@@ -1154,7 +1154,7 @@ mod tests {
                     search_query: String::new(),
                     search_matches: Vec::new(),
                     current_match_index: None,
-                });
+                }));
             }
         }
         app

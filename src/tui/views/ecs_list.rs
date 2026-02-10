@@ -11,41 +11,42 @@ use crate::tui::components::status_bar::render_footer;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
+/// ECSクラスター一覧画面の描画に必要なプロパティ
+pub struct EcsListProps<'a> {
+    pub clusters: &'a [Cluster],
+    pub selected_index: usize,
+    pub filter_input: &'a Input,
+    pub mode: &'a Mode,
+    pub loading: bool,
+    pub spinner_tick: usize,
+}
+
 /// ECSクラスター一覧画面を描画する
-pub fn render(
-    frame: &mut Frame,
-    clusters: &[Cluster],
-    selected_index: usize,
-    filter_input: &Input,
-    mode: &Mode,
-    loading: bool,
-    spinner_tick: usize,
-    area: Rect,
-) {
+pub fn render(frame: &mut Frame, props: &EcsListProps, area: Rect) {
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
         Constraint::Length(1), // フッター
     ])
     .split(area);
 
-    let count_title = format!(" ECS Clusters ({}) ", clusters.len());
+    let count_title = format!(" ECS Clusters ({}) ", props.clusters.len());
     let outer_block = Block::default().title(count_title).borders(Borders::ALL);
     let inner = outer_block.inner(outer_chunks[0]);
     frame.render_widget(outer_block, outer_chunks[0]);
 
-    if loading {
-        let loading_widget = Loading::new("Loading clusters...", spinner_tick);
+    if props.loading {
+        let loading_widget = Loading::new("Loading clusters...", props.spinner_tick);
         frame.render_widget(loading_widget, inner);
     } else {
-        render_table(frame, clusters, selected_index, inner);
+        render_table(frame, props.clusters, props.selected_index, inner);
     }
 
     // フッター
     render_footer(
         frame,
         outer_chunks[1],
-        mode,
-        filter_input.value(),
+        props.mode,
+        props.filter_input.value(),
         "j/k:move Enter:detail /:filter ?:help Esc:back",
     );
 }
@@ -135,16 +136,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(
-                    frame,
-                    &clusters,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    frame.area(),
-                )
+                let props = EcsListProps {
+                    clusters: &clusters,
+                    selected_index: 0,
+                    filter_input: &input,
+                    mode: &Mode::Normal,
+                    loading: false,
+                    spinner_tick: 0,
+                };
+                render(frame, &props, frame.area())
             })
             .unwrap();
 
@@ -161,16 +161,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(
-                    frame,
-                    &clusters,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    frame.area(),
-                )
+                let props = EcsListProps {
+                    clusters: &clusters,
+                    selected_index: 0,
+                    filter_input: &input,
+                    mode: &Mode::Normal,
+                    loading: false,
+                    spinner_tick: 0,
+                };
+                render(frame, &props, frame.area())
             })
             .unwrap();
 
@@ -195,16 +194,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(
-                    frame,
-                    &clusters,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    frame.area(),
-                )
+                let props = EcsListProps {
+                    clusters: &clusters,
+                    selected_index: 0,
+                    filter_input: &input,
+                    mode: &Mode::Normal,
+                    loading: false,
+                    spinner_tick: 0,
+                };
+                render(frame, &props, frame.area())
             })
             .unwrap();
 
@@ -223,16 +221,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(
-                    frame,
-                    &clusters,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    true,
-                    0,
-                    frame.area(),
-                )
+                let props = EcsListProps {
+                    clusters: &clusters,
+                    selected_index: 0,
+                    filter_input: &input,
+                    mode: &Mode::Normal,
+                    loading: true,
+                    spinner_tick: 0,
+                };
+                render(frame, &props, frame.area())
             })
             .unwrap();
 
@@ -249,16 +246,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(
-                    frame,
-                    &clusters,
-                    0,
-                    &input,
-                    &Mode::Filter,
-                    false,
-                    0,
-                    frame.area(),
-                )
+                let props = EcsListProps {
+                    clusters: &clusters,
+                    selected_index: 0,
+                    filter_input: &input,
+                    mode: &Mode::Filter,
+                    loading: false,
+                    spinner_tick: 0,
+                };
+                render(frame, &props, frame.area())
             })
             .unwrap();
 
@@ -275,16 +271,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(
-                    frame,
-                    &clusters,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    frame.area(),
-                )
+                let props = EcsListProps {
+                    clusters: &clusters,
+                    selected_index: 0,
+                    filter_input: &input,
+                    mode: &Mode::Normal,
+                    loading: false,
+                    spinner_tick: 0,
+                };
+                render(frame, &props, frame.area())
             })
             .unwrap();
 
@@ -305,16 +300,15 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render(
-                    frame,
-                    &clusters,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    frame.area(),
-                )
+                let props = EcsListProps {
+                    clusters: &clusters,
+                    selected_index: 0,
+                    filter_input: &input,
+                    mode: &Mode::Normal,
+                    loading: false,
+                    spinner_tick: 0,
+                };
+                render(frame, &props, frame.area())
             })
             .unwrap();
 

@@ -314,16 +314,15 @@ fn render_tab_content(
                 filtered_clusters, ..
             } = &tab.data
             {
-                awsui::tui::views::ecs_list::render(
-                    frame,
-                    filtered_clusters,
-                    tab.selected_index,
-                    &tab.filter_input,
-                    &tab.mode,
-                    tab.loading,
+                let props = awsui::tui::views::ecs_list::EcsListProps {
+                    clusters: filtered_clusters,
+                    selected_index: tab.selected_index,
+                    filter_input: &tab.filter_input,
+                    mode: &tab.mode,
+                    loading: tab.loading,
                     spinner_tick,
-                    area,
-                );
+                };
+                awsui::tui::views::ecs_list::render(frame, &props, area);
             }
         }
         Some(View::EcsDetail) => {

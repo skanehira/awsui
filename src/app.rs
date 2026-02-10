@@ -715,7 +715,7 @@ impl App {
                                         && let crate::tab::ServiceData::Ecs { log_state, .. } =
                                             &mut tab.data
                                     {
-                                        *log_state = Some(crate::tab::LogViewState {
+                                        *log_state = Some(Box::new(crate::tab::LogViewState {
                                             container_name,
                                             log_group,
                                             log_stream,
@@ -726,7 +726,7 @@ impl App {
                                             search_query: String::new(),
                                             search_matches: Vec::new(),
                                             current_match_index: None,
-                                        });
+                                        }));
                                         tab.loading = true;
                                     }
                                 }
@@ -1276,7 +1276,7 @@ impl App {
                             format!("{}/{}/{}", stream_prefix, config.container_name, task_id);
                         if let Some(tab) = self.find_tab_mut(tab_id) {
                             if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data {
-                                *log_state = Some(crate::tab::LogViewState {
+                                *log_state = Some(Box::new(crate::tab::LogViewState {
                                     container_name: config.container_name.clone(),
                                     log_group,
                                     log_stream,
@@ -1287,7 +1287,7 @@ impl App {
                                     search_query: String::new(),
                                     search_matches: Vec::new(),
                                     current_match_index: None,
-                                });
+                                }));
                             }
                             tab.loading = true;
                         }
