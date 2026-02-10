@@ -33,7 +33,7 @@ mock-data = []
 
 [dev-dependencies]
 insta = "1.46"
-mockall = "0.13"
+mockall = "0.14"
 portable-pty = "0.8"
 pretty_assertions = "1"
 rstest = "0.26"
