@@ -622,15 +622,57 @@ impl App {
         }
     }
 
+    /// Common handler for tab events that follow the Ok/Err pattern:
+    /// Ok → update data + loading=false + optional apply_filter, Err → loading=false + error message.
+    /// `update_fn` returns true if the loaded data is empty.
+    fn handle_loaded_result<T, E: std::fmt::Display>(
+        &mut self,
+        tab_id: crate::tab::TabId,
+        result: Result<T, E>,
+        empty_message: Option<&str>,
+        apply_filter: bool,
+        update_fn: impl FnOnce(&mut crate::tab::Tab, T) -> bool,
+    ) {
+        match result {
+            Ok(data) => {
+                let is_empty = if let Some(tab) = self.find_tab_mut(tab_id) {
+                    let empty = update_fn(tab, data);
+                    tab.loading = false;
+                    if apply_filter {
+                        tab.apply_filter();
+                    }
+                    empty
+                } else {
+                    false
+                };
+                if is_empty
+                    && let Some(msg) = empty_message
+                {
+                    self.show_message(MessageLevel::Info, "Info", msg);
+                }
+            }
+            Err(e) => {
+                if let Some(tab) = self.find_tab_mut(tab_id) {
+                    tab.loading = false;
+                }
+                self.show_message(MessageLevel::Error, "Error", e.to_string());
+            }
+        }
+    }
+
     fn handle_tab_event(&mut self, tab_id: crate::tab::TabId, tab_event: crate::event::TabEvent) {
         use crate::event::TabEvent;
         use crate::tab::ServiceData;
 
         match tab_event {
-            TabEvent::InstancesLoaded(result) => match result {
-                Ok(instances) => {
-                    let is_empty = instances.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+            TabEvent::InstancesLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No instances found"),
+                    true,
+                    |tab, instances| {
+                        let is_empty = instances.is_empty();
                         if let ServiceData::Ec2 {
                             instances: inst,
                             filtered_instances,
@@ -639,20 +681,10 @@ impl App {
                             *inst = instances;
                             *filtered_instances = inst.clone();
                         }
-                        tab.loading = false;
-                        tab.apply_filter();
-                    }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No instances found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
+                        is_empty
+                    },
+                );
+            }
             TabEvent::ActionCompleted(result) => match result {
                 Ok(msg) => {
                     self.show_message(MessageLevel::Success, "Success", msg);
@@ -664,10 +696,14 @@ impl App {
                     self.show_message(MessageLevel::Error, "Error", e.to_string());
                 }
             },
-            TabEvent::RepositoriesLoaded(result) => match result {
-                Ok(repos) => {
-                    let is_empty = repos.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+            TabEvent::RepositoriesLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No repositories found"),
+                    true,
+                    |tab, repos| {
+                        let is_empty = repos.is_empty();
                         if let ServiceData::Ecr {
                             repositories,
                             filtered_repositories,
@@ -677,44 +713,33 @@ impl App {
                             *repositories = repos;
                             *filtered_repositories = repositories.clone();
                         }
-                        tab.loading = false;
-                        tab.apply_filter();
-                    }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No repositories found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::ImagesLoaded(result) => match result {
-                Ok(images) => {
-                    let is_empty = images.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::ImagesLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No images found"),
+                    false,
+                    |tab, images| {
+                        let is_empty = images.is_empty();
                         if let ServiceData::Ecr { images: imgs, .. } = &mut tab.data {
                             *imgs = images;
                         }
-                        tab.loading = false;
-                    }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No images found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::ClustersLoaded(result) => match result {
-                Ok(clusters) => {
-                    let is_empty = clusters.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::ClustersLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No clusters found"),
+                    true,
+                    |tab, clusters| {
+                        let is_empty = clusters.is_empty();
                         if let ServiceData::Ecs {
                             clusters: cls,
                             filtered_clusters,
@@ -724,64 +749,48 @@ impl App {
                             *cls = clusters;
                             *filtered_clusters = cls.clone();
                         }
-                        tab.loading = false;
-                        tab.apply_filter();
-                    }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No clusters found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::EcsServicesLoaded(result) => match result {
-                Ok(services) => {
-                    let is_empty = services.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::EcsServicesLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No services found"),
+                    false,
+                    |tab, services| {
+                        let is_empty = services.is_empty();
                         if let ServiceData::Ecs { services: svcs, .. } = &mut tab.data {
                             *svcs = services;
                         }
-                        tab.loading = false;
-                    }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No services found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::EcsTasksLoaded(result) => match result {
-                Ok(tasks) => {
-                    let is_empty = tasks.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::EcsTasksLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No tasks found"),
+                    false,
+                    |tab, tasks| {
+                        let is_empty = tasks.is_empty();
                         if let ServiceData::Ecs { tasks: t, .. } = &mut tab.data {
                             *t = tasks;
                         }
-                        tab.loading = false;
-                    }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No tasks found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::BucketsLoaded(result) => match result {
-                Ok(buckets) => {
-                    let is_empty = buckets.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::BucketsLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No buckets found"),
+                    true,
+                    |tab, buckets| {
+                        let is_empty = buckets.is_empty();
                         if let ServiceData::S3 {
                             buckets: bkts,
                             filtered_buckets,
@@ -791,40 +800,26 @@ impl App {
                             *bkts = buckets;
                             *filtered_buckets = bkts.clone();
                         }
-                        tab.loading = false;
-                        tab.apply_filter();
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::ObjectsLoaded(result) => {
+                self.handle_loaded_result(tab_id, result, None, false, |tab, objects| {
+                    if let ServiceData::S3 { objects: objs, .. } = &mut tab.data {
+                        *objs = objects;
                     }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No buckets found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::ObjectsLoaded(result) => match result {
-                Ok(objects) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        if let ServiceData::S3 { objects: objs, .. } = &mut tab.data {
-                            *objs = objects;
-                        }
-                        tab.loading = false;
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::VpcsLoaded(result) => match result {
-                Ok(vpcs) => {
-                    let is_empty = vpcs.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                    false
+                });
+            }
+            TabEvent::VpcsLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No VPCs found"),
+                    true,
+                    |tab, vpcs| {
+                        let is_empty = vpcs.is_empty();
                         if let ServiceData::Vpc {
                             vpcs: vs,
                             filtered_vpcs,
@@ -834,44 +829,33 @@ impl App {
                             *vs = vpcs;
                             *filtered_vpcs = vs.clone();
                         }
-                        tab.loading = false;
-                        tab.apply_filter();
-                    }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No VPCs found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::SubnetsLoaded(result) => match result {
-                Ok(subnets) => {
-                    let is_empty = subnets.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::SubnetsLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No subnets found"),
+                    false,
+                    |tab, subnets| {
+                        let is_empty = subnets.is_empty();
                         if let ServiceData::Vpc { subnets: subs, .. } = &mut tab.data {
                             *subs = subnets;
                         }
-                        tab.loading = false;
-                    }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No subnets found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::SecretsLoaded(result) => match result {
-                Ok(secrets) => {
-                    let is_empty = secrets.is_empty();
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::SecretsLoaded(result) => {
+                self.handle_loaded_result(
+                    tab_id,
+                    result,
+                    Some("No secrets found"),
+                    true,
+                    |tab, secrets| {
+                        let is_empty = secrets.is_empty();
                         if let ServiceData::Secrets {
                             secrets: secs,
                             filtered_secrets,
@@ -881,60 +865,34 @@ impl App {
                             *secs = secrets;
                             *filtered_secrets = secs.clone();
                         }
-                        tab.loading = false;
-                        tab.apply_filter();
+                        is_empty
+                    },
+                );
+            }
+            TabEvent::SecretDetailLoaded(result) => {
+                self.handle_loaded_result(tab_id, result, None, false, |tab, detail| {
+                    if let ServiceData::Secrets { detail: det, .. } = &mut tab.data {
+                        *det = Some(detail);
                     }
-                    if is_empty {
-                        self.show_message(MessageLevel::Info, "Info", "No secrets found");
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::SecretDetailLoaded(result) => match result {
-                Ok(detail) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        if let ServiceData::Secrets { detail: det, .. } = &mut tab.data {
-                            *det = Some(detail);
+                    false
+                });
+            }
+            TabEvent::SecretValueLoaded(result) => {
+                self.handle_loaded_result(tab_id, result, None, false, |tab, value| {
+                    if let ServiceData::Secrets {
+                        detail,
+                        value_visible,
+                        ..
+                    } = &mut tab.data
+                    {
+                        if let Some(d) = detail {
+                            d.secret_value = Some(value);
                         }
-                        tab.loading = false;
+                        *value_visible = true;
                     }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
-            TabEvent::SecretValueLoaded(result) => match result {
-                Ok(value) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        if let ServiceData::Secrets {
-                            detail,
-                            value_visible,
-                            ..
-                        } = &mut tab.data
-                        {
-                            if let Some(d) = detail {
-                                d.secret_value = Some(value);
-                            }
-                            *value_visible = true;
-                        }
-                        tab.loading = false;
-                    }
-                }
-                Err(e) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id) {
-                        tab.loading = false;
-                    }
-                    self.show_message(MessageLevel::Error, "Error", e.to_string());
-                }
-            },
+                    false
+                });
+            }
             TabEvent::NavigateVpcLoaded(result) => {
                 match result {
                     Ok((vpcs, subnets)) => {
