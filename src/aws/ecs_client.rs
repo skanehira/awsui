@@ -199,9 +199,7 @@ impl EcsClient for AwsEcsClient {
             .iter()
             .filter_map(|cd| {
                 let log_config = cd.log_configuration()?;
-                if *log_config.log_driver()
-                    != aws_sdk_ecs::types::LogDriver::Awslogs
-                {
+                if *log_config.log_driver() != aws_sdk_ecs::types::LogDriver::Awslogs {
                     return None;
                 }
                 let options = log_config.options();
@@ -293,9 +291,7 @@ fn convert_service(sdk: &aws_sdk_ecs::types::Service) -> Service {
         pending_count: sdk.pending_count(),
         task_definition: sdk.task_definition().unwrap_or_default().to_string(),
         launch_type: sdk.launch_type().map(|lt| lt.as_str().to_string()),
-        scheduling_strategy: sdk
-            .scheduling_strategy()
-            .map(|s| s.as_str().to_string()),
+        scheduling_strategy: sdk.scheduling_strategy().map(|s| s.as_str().to_string()),
         created_at: sdk.created_at().map(|dt| {
             dt.fmt(aws_sdk_ecs::primitives::DateTimeFormat::DateTime)
                 .unwrap_or_default()

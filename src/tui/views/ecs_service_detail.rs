@@ -75,10 +75,7 @@ fn render_service_overview(frame: &mut Frame, service: &Service, area: Rect) {
             "Deploy Status",
             service.deployment_status.as_deref().unwrap_or("-"),
         ),
-        detail_line(
-            "Launch Type",
-            service.launch_type.as_deref().unwrap_or("-"),
-        ),
+        detail_line("Launch Type", service.launch_type.as_deref().unwrap_or("-")),
         detail_line(
             "Scheduling",
             service.scheduling_strategy.as_deref().unwrap_or("-"),
@@ -132,11 +129,7 @@ fn task_to_row(task: &Task) -> Row<'_> {
     };
 
     // タスクIDはARNの末尾部分を表示
-    let task_id = task
-        .task_arn
-        .rsplit('/')
-        .next()
-        .unwrap_or(&task.task_arn);
+    let task_id = task.task_arn.rsplit('/').next().unwrap_or(&task.task_arn);
     // 長すぎる場合は先頭12文字に切り詰め
     let task_id_short = if task_id.len() > 12 {
         &task_id[..12]
@@ -191,8 +184,8 @@ mod tests {
             desired_count: 3,
             running_count: 3,
             pending_count: 0,
-            task_definition:
-                "arn:aws:ecs:ap-northeast-1:123456789012:task-definition/my-task:1".to_string(),
+            task_definition: "arn:aws:ecs:ap-northeast-1:123456789012:task-definition/my-task:1"
+                .to_string(),
             launch_type: Some("FARGATE".to_string()),
             scheduling_strategy: Some("REPLICA".to_string()),
             created_at: Some("2026-02-04T20:07:00Z".to_string()),

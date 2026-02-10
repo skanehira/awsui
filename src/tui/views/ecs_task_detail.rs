@@ -17,11 +17,7 @@ pub fn render(frame: &mut Frame, task: &Task, area: Rect) {
     .split(area);
 
     // タスクIDをARNの末尾から取得
-    let task_id = task
-        .task_arn
-        .rsplit('/')
-        .next()
-        .unwrap_or(&task.task_arn);
+    let task_id = task.task_arn.rsplit('/').next().unwrap_or(&task.task_arn);
     let task_id_short = if task_id.len() > 12 {
         &task_id[..12]
     } else {
@@ -67,10 +63,7 @@ fn render_task_overview(frame: &mut Frame, task: &Task, area: Rect) {
         detail_line("Task Definition", &task.task_definition_arn),
         detail_line("Launch Type", task.launch_type.as_deref().unwrap_or("-")),
         detail_line("CPU / Memory", &cpu_memory),
-        detail_line(
-            "Platform",
-            task.platform_version.as_deref().unwrap_or("-"),
-        ),
+        detail_line("Platform", task.platform_version.as_deref().unwrap_or("-")),
         detail_line("AZ", task.availability_zone.as_deref().unwrap_or("-")),
         detail_line("Started", task.started_at.as_deref().unwrap_or("-")),
         detail_line("Task ARN", &task.task_arn),
@@ -84,14 +77,12 @@ fn render_task_overview(frame: &mut Frame, task: &Task, area: Rect) {
 
 /// コンテナテーブルを描画
 fn render_containers_table(frame: &mut Frame, task: &Task, area: Rect) {
-    let block = Block::default()
-        .title(" Containers ")
-        .borders(Borders::ALL);
+    let block = Block::default().title(" Containers ").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let headers = Row::new(vec!["Name", "Image", "Status", "Exit", "Health"])
-        .style(theme::header());
+    let headers =
+        Row::new(vec!["Name", "Image", "Status", "Exit", "Health"]).style(theme::header());
 
     let rows: Vec<Row> = task
         .containers

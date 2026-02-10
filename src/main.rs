@@ -2,13 +2,19 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use awsui::app::{App, ConfirmAction, Mode, View};
-use awsui::aws::client::{AwsEc2Client, Ec2Client};
-use awsui::aws::ecr_client::{AwsEcrClient, EcrClient};
-use awsui::aws::ecs_client::{AwsEcsClient, EcsClient};
-use awsui::aws::logs_client::{AwsLogsClient, LogsClient};
-use awsui::aws::s3_client::{AwsS3Client, S3Client};
-use awsui::aws::secrets_client::{AwsSecretsClient, SecretsClient};
-use awsui::aws::vpc_client::{AwsVpcClient, VpcClient};
+use awsui::aws::client::Ec2Client;
+use awsui::aws::ecr_client::EcrClient;
+use awsui::aws::ecs_client::EcsClient;
+use awsui::aws::logs_client::LogsClient;
+use awsui::aws::s3_client::S3Client;
+use awsui::aws::secrets_client::SecretsClient;
+use awsui::aws::vpc_client::VpcClient;
+#[cfg(not(feature = "mock-data"))]
+use awsui::aws::{
+    client::AwsEc2Client, ecr_client::AwsEcrClient, ecs_client::AwsEcsClient,
+    logs_client::AwsLogsClient, s3_client::AwsS3Client, secrets_client::AwsSecretsClient,
+    vpc_client::AwsVpcClient,
+};
 use awsui::cli::{Cli, DeletePermissions};
 use awsui::config;
 use awsui::event::{AppEvent, TabEvent};
@@ -65,41 +71,50 @@ async fn main() -> anyhow::Result<()> {
     let delete_permissions =
         DeletePermissions::from_cli(cli.allow_delete.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
 
-    // 1. SSOプロファイル読み込み
-    let profiles = config::load_sso_profiles()?;
-    let profile_names = config::profile_names(&profiles);
+    // 1. SSOプロファイル読み込み + プロファイル選択
+    let (selected_profile, region) = if let Some(profile_name) = cli.profile {
+        // --profile が指定されていればインタラクティブ選択をスキップ
+        let profiles = config::load_sso_profiles().unwrap_or_default();
+        let region = config::get_region_for_profile(&profiles, &profile_name);
+        (profile_name, region)
+    } else {
+        let profiles = config::load_sso_profiles()?;
+        let profile_names = config::profile_names(&profiles);
 
-    if profile_names.is_empty() {
-        eprintln!("No SSO profiles found in ~/.aws/config");
-        return Ok(());
-    }
+        if profile_names.is_empty() {
+            eprintln!("No SSO profiles found in ~/.aws/config");
+            return Ok(());
+        }
 
-    // 2. skim でプロファイル選択
-    let Some(selected_profile) = select_profile(&profile_names) else {
-        return Ok(());
-    };
+        // 2. skim でプロファイル選択
+        let Some(selected_profile) = select_profile(&profile_names) else {
+            return Ok(());
+        };
 
-    // 3. SSO トークンチェック + login
-    if let Some(profile) = profiles.iter().find(|p| p.name == selected_profile) {
-        match sso::check_sso_token(profile) {
-            SsoTokenStatus::Valid => {}
-            SsoTokenStatus::Expired | SsoTokenStatus::NotFound => {
-                let status = std::process::Command::new("aws")
-                    .args(["sso", "login", "--profile", &selected_profile])
-                    .stdin(std::process::Stdio::inherit())
-                    .stdout(std::process::Stdio::inherit())
-                    .stderr(std::process::Stdio::inherit())
-                    .status()?;
-                if !status.success() {
-                    eprintln!("aws sso login failed");
-                    return Ok(());
+        // 3. SSO トークンチェック + login
+        if let Some(profile) = profiles.iter().find(|p| p.name == selected_profile) {
+            match sso::check_sso_token(profile) {
+                SsoTokenStatus::Valid => {}
+                SsoTokenStatus::Expired | SsoTokenStatus::NotFound => {
+                    let status = std::process::Command::new("aws")
+                        .args(["sso", "login", "--profile", &selected_profile])
+                        .stdin(std::process::Stdio::inherit())
+                        .stdout(std::process::Stdio::inherit())
+                        .stderr(std::process::Stdio::inherit())
+                        .status()?;
+                    if !status.success() {
+                        eprintln!("aws sso login failed");
+                        return Ok(());
+                    }
                 }
             }
         }
-    }
+
+        let region = config::get_region_for_profile(&profiles, &selected_profile);
+        (selected_profile, region)
+    };
 
     // 4. リージョン取得 + App初期化
-    let region = config::get_region_for_profile(&profiles, &selected_profile);
     let mut app = App::with_delete_permissions(selected_profile, region, delete_permissions);
 
     // 5. ターミナル初期化
@@ -325,7 +340,15 @@ fn render_tab_content(
             {
                 // ログビュー表示中
                 if let Some(log_state) = log_state {
-                    awsui::tui::views::ecs_log::render(frame, log_state, tab.loading, spinner_tick, &tab.mode, tab.filter_input.value(), area);
+                    awsui::tui::views::ecs_log::render(
+                        frame,
+                        log_state,
+                        tab.loading,
+                        spinner_tick,
+                        &tab.mode,
+                        tab.filter_input.value(),
+                        area,
+                    );
                 } else if let Some(task_idx) = selected_task_index
                     && let Some(task) = tasks.get(*task_idx)
                 {
@@ -584,13 +607,15 @@ async fn handle_side_effects(
     // ログ初回取得（log_stateがありloading=trueの場合、ContainerSelectConfirm後など）
     if tab_loading
         && let Some(tab) = app.find_tab(tab_id)
-        && let awsui::tab::ServiceData::Ecs { log_state: Some(state), .. } = &tab.data
+        && let awsui::tab::ServiceData::Ecs {
+            log_state: Some(state),
+            ..
+        } = &tab.data
     {
         let log_group = state.log_group.clone();
         let log_stream = state.log_stream.clone();
         let next_token = state.next_forward_token.clone();
-        fetch_log_events(app, clients, tab_id, &log_group, &log_stream, next_token)
-            .await;
+        fetch_log_events(app, clients, tab_id, &log_group, &log_stream, next_token).await;
         return;
     }
 
@@ -712,9 +737,90 @@ async fn handle_side_effects(
     if let Some(danger_action) = app.pending_danger_action.take() {
         handle_danger_side_effect(app, clients, danger_action, tab_id);
     }
-
 }
 
+#[cfg(feature = "mock-data")]
+async fn create_client_and_load(app: &mut App, clients: &mut Clients, tab_id: TabId) {
+    use awsui::aws::mock_clients::*;
+
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    let service = tab.service;
+
+    match service {
+        awsui::service::ServiceKind::Ec2 => {
+            let client: Arc<dyn Ec2Client> = Arc::new(MockEc2ClientImpl);
+            load_instances(&app.event_tx, client.clone(), tab_id);
+            clients.ec2 = Some(client);
+        }
+        awsui::service::ServiceKind::Ecr => {
+            let client: Arc<dyn EcrClient> = Arc::new(MockEcrClientImpl);
+            let tx = app.event_tx.clone();
+            let c = client.clone();
+            tokio::spawn(async move {
+                let result = c.describe_repositories().await;
+                let _ = tx
+                    .send(AppEvent::TabEvent(
+                        tab_id,
+                        TabEvent::RepositoriesLoaded(result),
+                    ))
+                    .await;
+            });
+            clients.ecr = Some(client);
+        }
+        awsui::service::ServiceKind::Ecs => {
+            let client: Arc<dyn EcsClient> = Arc::new(MockEcsClientImpl);
+            let tx = app.event_tx.clone();
+            let c = client.clone();
+            tokio::spawn(async move {
+                let result = c.list_clusters().await;
+                let _ = tx
+                    .send(AppEvent::TabEvent(tab_id, TabEvent::ClustersLoaded(result)))
+                    .await;
+            });
+            clients.ecs = Some(client);
+        }
+        awsui::service::ServiceKind::S3 => {
+            let client: Arc<dyn S3Client> = Arc::new(MockS3ClientImpl);
+            let tx = app.event_tx.clone();
+            let c = client.clone();
+            tokio::spawn(async move {
+                let result = c.list_buckets().await;
+                let _ = tx
+                    .send(AppEvent::TabEvent(tab_id, TabEvent::BucketsLoaded(result)))
+                    .await;
+            });
+            clients.s3 = Some(client);
+        }
+        awsui::service::ServiceKind::Vpc => {
+            let client: Arc<dyn VpcClient> = Arc::new(MockVpcClientImpl);
+            let tx = app.event_tx.clone();
+            let c = client.clone();
+            tokio::spawn(async move {
+                let result = c.describe_vpcs().await;
+                let _ = tx
+                    .send(AppEvent::TabEvent(tab_id, TabEvent::VpcsLoaded(result)))
+                    .await;
+            });
+            clients.vpc = Some(client);
+        }
+        awsui::service::ServiceKind::SecretsManager => {
+            let client: Arc<dyn SecretsClient> = Arc::new(MockSecretsClientImpl);
+            let tx = app.event_tx.clone();
+            let c = client.clone();
+            tokio::spawn(async move {
+                let result = c.list_secrets().await;
+                let _ = tx
+                    .send(AppEvent::TabEvent(tab_id, TabEvent::SecretsLoaded(result)))
+                    .await;
+            });
+            clients.secrets = Some(client);
+        }
+    }
+}
+
+#[cfg(not(feature = "mock-data"))]
 async fn create_client_and_load(app: &mut App, clients: &mut Clients, tab_id: TabId) {
     let Some(profile_name) = &app.profile else {
         return;
@@ -1001,10 +1107,7 @@ fn load_ecs_tasks(app: &App, clients: &Clients, tab_id: TabId) {
         tokio::spawn(async move {
             let result = c.list_tasks(&cluster_arn, &service_name).await;
             let _ = tx
-                .send(AppEvent::TabEvent(
-                    tab_id,
-                    TabEvent::EcsTasksLoaded(result),
-                ))
+                .send(AppEvent::TabEvent(tab_id, TabEvent::EcsTasksLoaded(result)))
                 .await;
         });
     }
@@ -1049,34 +1152,41 @@ async fn handle_navigation_link(app: &mut App, clients: &mut Clients, tab_id: Ta
 
     // VPCクライアントがない場合は作成
     if clients.vpc.is_none() {
-        let Some(profile_name) = &app.profile else {
-            return;
-        };
-        let region = app
-            .region
-            .clone()
-            .unwrap_or_else(|| "ap-northeast-1".to_string());
-        match AwsVpcClient::new(profile_name, &region).await {
-            Ok(client) => {
-                clients.vpc = Some(Arc::new(client));
-            }
-            Err(e) => {
-                // クライアント作成失敗時はスタックを巻き戻す
-                if let Some(tab) = app.find_tab_mut(tab_id) {
-                    if let Some(entry) = tab.navigation_stack.pop() {
-                        tab.tab_view = match (entry.view.clone(), tab.service) {
-                            (View::Ec2List, _) => awsui::tab::TabView::List,
-                            (View::Ec2Detail, _) => awsui::tab::TabView::Detail,
-                            _ => awsui::tab::TabView::Detail,
-                        };
-                        tab.selected_index = entry.selected_index;
-                        tab.detail_tag_index = entry.detail_tag_index;
-                        tab.detail_tab = entry.detail_tab;
-                    }
-                    tab.loading = false;
-                }
-                app.show_message(awsui::app::MessageLevel::Error, "Error", e.to_string());
+        #[cfg(feature = "mock-data")]
+        {
+            clients.vpc = Some(Arc::new(awsui::aws::mock_clients::MockVpcClientImpl));
+        }
+        #[cfg(not(feature = "mock-data"))]
+        {
+            let Some(profile_name) = &app.profile else {
                 return;
+            };
+            let region = app
+                .region
+                .clone()
+                .unwrap_or_else(|| "ap-northeast-1".to_string());
+            match AwsVpcClient::new(profile_name, &region).await {
+                Ok(client) => {
+                    clients.vpc = Some(Arc::new(client));
+                }
+                Err(e) => {
+                    // クライアント作成失敗時はスタックを巻き戻す
+                    if let Some(tab) = app.find_tab_mut(tab_id) {
+                        if let Some(entry) = tab.navigation_stack.pop() {
+                            tab.tab_view = match (entry.view.clone(), tab.service) {
+                                (View::Ec2List, _) => awsui::tab::TabView::List,
+                                (View::Ec2Detail, _) => awsui::tab::TabView::Detail,
+                                _ => awsui::tab::TabView::Detail,
+                            };
+                            tab.selected_index = entry.selected_index;
+                            tab.detail_tag_index = entry.detail_tag_index;
+                            tab.detail_tab = entry.detail_tab;
+                        }
+                        tab.loading = false;
+                    }
+                    app.show_message(awsui::app::MessageLevel::Error, "Error", e.to_string());
+                    return;
+                }
             }
         }
     }
@@ -1517,23 +1627,30 @@ async fn fetch_log_events(
 ) {
     // Logsクライアントがない場合は作成
     if clients.logs.is_none() {
-        let Some(profile_name) = &app.profile else {
-            return;
-        };
-        let region = app
-            .region
-            .clone()
-            .unwrap_or_else(|| "ap-northeast-1".to_string());
-        match AwsLogsClient::new(profile_name, &region).await {
-            Ok(client) => {
-                clients.logs = Some(Arc::new(client));
-            }
-            Err(e) => {
-                if let Some(tab) = app.find_tab_mut(tab_id) {
-                    tab.loading = false;
-                }
-                app.show_message(awsui::app::MessageLevel::Error, "Error", e.to_string());
+        #[cfg(feature = "mock-data")]
+        {
+            clients.logs = Some(Arc::new(awsui::aws::mock_clients::MockLogsClientImpl));
+        }
+        #[cfg(not(feature = "mock-data"))]
+        {
+            let Some(profile_name) = &app.profile else {
                 return;
+            };
+            let region = app
+                .region
+                .clone()
+                .unwrap_or_else(|| "ap-northeast-1".to_string());
+            match AwsLogsClient::new(profile_name, &region).await {
+                Ok(client) => {
+                    clients.logs = Some(Arc::new(client));
+                }
+                Err(e) => {
+                    if let Some(tab) = app.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    app.show_message(awsui::app::MessageLevel::Error, "Error", e.to_string());
+                    return;
+                }
             }
         }
     }
@@ -1571,10 +1688,7 @@ fn manage_log_polling(
 
     if should_poll {
         // 既にポーリング中なら何もしない
-        if log_poll_handle
-            .as_ref()
-            .is_some_and(|h| !h.is_finished())
-        {
+        if log_poll_handle.as_ref().is_some_and(|h| !h.is_finished()) {
             return;
         }
 
@@ -1584,7 +1698,11 @@ fn manage_log_polling(
         };
         let tab_id = tab.id;
         let Some((log_group, log_stream, next_token)) = (|| {
-            if let awsui::tab::ServiceData::Ecs { log_state: Some(state), .. } = &tab.data {
+            if let awsui::tab::ServiceData::Ecs {
+                log_state: Some(state),
+                ..
+            } = &tab.data
+            {
                 return Some((
                     state.log_group.clone(),
                     state.log_stream.clone(),

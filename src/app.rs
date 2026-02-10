@@ -241,8 +241,10 @@ pub struct App {
     pub pending_danger_action: Option<DangerAction>,
 
     // ログ関連の一時状態
-    pub pending_log_configs:
-        Option<(crate::tab::TabId, Vec<crate::aws::ecs_model::ContainerLogConfig>)>,
+    pub pending_log_configs: Option<(
+        crate::tab::TabId,
+        Vec<crate::aws::ecs_model::ContainerLogConfig>,
+    )>,
 
     // Async communication
     pub event_tx: mpsc::Sender<AppEvent>,
@@ -678,66 +680,56 @@ impl App {
                         }
                         if let Some(container_name) = name {
                             // pending_log_configsから選択されたコンテナのconfigを見つけてlog_stateを作成
-                            if let Some((_config_tab_id, configs)) =
-                                self.pending_log_configs.take()
+                            if let Some((_config_tab_id, configs)) = self.pending_log_configs.take()
                                 && let Some(config) =
                                     configs.iter().find(|c| c.container_name == container_name)
                             {
-                                    let log_group =
-                                        config.log_group.clone().unwrap_or_default();
-                                    let tab_id =
-                                        self.active_tab().map(|t| t.id);
-                                    let task_id = self.active_tab().and_then(|tab| {
-                                        if let crate::tab::ServiceData::Ecs {
-                                            tasks,
-                                            selected_task_index,
-                                            ..
-                                        } = &tab.data
-                                        {
-                                            selected_task_index
-                                                .and_then(|idx| tasks.get(idx))
-                                                .map(|t| {
-                                                    t.task_arn
-                                                        .rsplit('/')
-                                                        .next()
-                                                        .unwrap_or(&t.task_arn)
-                                                        .to_string()
-                                                })
-                                        } else {
-                                            None
-                                        }
-                                    });
-                                    if let (Some(_tab_id), Some(task_id)) = (tab_id, task_id) {
-                                        let stream_prefix = config
-                                            .stream_prefix
-                                            .as_deref()
-                                            .unwrap_or_default();
-                                        let log_stream = format!(
-                                            "{}/{}/{}",
-                                            stream_prefix, container_name, task_id
-                                        );
-                                        if let Some(tab) = self.active_tab_mut()
-                                            && let crate::tab::ServiceData::Ecs {
-                                                log_state,
-                                                ..
-                                            } = &mut tab.data
-                                        {
-                                            *log_state =
-                                                Some(crate::tab::LogViewState {
-                                                    container_name,
-                                                    log_group,
-                                                    log_stream,
-                                                    events: Vec::new(),
-                                                    next_forward_token: None,
-                                                    auto_scroll: true,
-                                                    scroll_offset: 0,
-                                                    search_query: String::new(),
-                                                    search_matches: Vec::new(),
-                                                    current_match_index: None,
-                                                });
-                                            tab.loading = true;
-                                        }
+                                let log_group = config.log_group.clone().unwrap_or_default();
+                                let tab_id = self.active_tab().map(|t| t.id);
+                                let task_id = self.active_tab().and_then(|tab| {
+                                    if let crate::tab::ServiceData::Ecs {
+                                        tasks,
+                                        selected_task_index,
+                                        ..
+                                    } = &tab.data
+                                    {
+                                        selected_task_index.and_then(|idx| tasks.get(idx)).map(
+                                            |t| {
+                                                t.task_arn
+                                                    .rsplit('/')
+                                                    .next()
+                                                    .unwrap_or(&t.task_arn)
+                                                    .to_string()
+                                            },
+                                        )
+                                    } else {
+                                        None
                                     }
+                                });
+                                if let (Some(_tab_id), Some(task_id)) = (tab_id, task_id) {
+                                    let stream_prefix =
+                                        config.stream_prefix.as_deref().unwrap_or_default();
+                                    let log_stream =
+                                        format!("{}/{}/{}", stream_prefix, container_name, task_id);
+                                    if let Some(tab) = self.active_tab_mut()
+                                        && let crate::tab::ServiceData::Ecs { log_state, .. } =
+                                            &mut tab.data
+                                    {
+                                        *log_state = Some(crate::tab::LogViewState {
+                                            container_name,
+                                            log_group,
+                                            log_stream,
+                                            events: Vec::new(),
+                                            next_forward_token: None,
+                                            auto_scroll: true,
+                                            scroll_offset: 0,
+                                            search_query: String::new(),
+                                            search_matches: Vec::new(),
+                                            current_match_index: None,
+                                        });
+                                        tab.loading = true;
+                                    }
+                                }
                             }
                         }
                         return None;
@@ -1267,26 +1259,21 @@ impl App {
                                 ..
                             } = &tab.data
                             {
-                                selected_task_index
-                                    .and_then(|idx| tasks.get(idx))
-                                    .map(|t| {
-                                        t.task_arn
-                                            .rsplit('/')
-                                            .next()
-                                            .unwrap_or(&t.task_arn)
-                                            .to_string()
-                                    })
+                                selected_task_index.and_then(|idx| tasks.get(idx)).map(|t| {
+                                    t.task_arn
+                                        .rsplit('/')
+                                        .next()
+                                        .unwrap_or(&t.task_arn)
+                                        .to_string()
+                                })
                             } else {
                                 None
                             }
                         });
                         let Some(task_id) = task_id else { return };
-                        let stream_prefix =
-                            config.stream_prefix.as_deref().unwrap_or_default();
-                        let log_stream = format!(
-                            "{}/{}/{}",
-                            stream_prefix, config.container_name, task_id
-                        );
+                        let stream_prefix = config.stream_prefix.as_deref().unwrap_or_default();
+                        let log_stream =
+                            format!("{}/{}/{}", stream_prefix, config.container_name, task_id);
                         if let Some(tab) = self.find_tab_mut(tab_id) {
                             if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data {
                                 *log_state = Some(crate::tab::LogViewState {
@@ -1309,10 +1296,7 @@ impl App {
                         let names: Vec<String> =
                             configs.iter().map(|c| c.container_name.clone()).collect();
                         if let Some(tab) = self.find_tab_mut(tab_id) {
-                            tab.mode = Mode::ContainerSelect {
-                                names,
-                                selected: 0,
-                            };
+                            tab.mode = Mode::ContainerSelect { names, selected: 0 };
                         }
                         // configs を一時保存（後でContainerSelectConfirmで使用）
                         // ContainerSelectConfirm時にmain.rsで再度describe_task_definition_log_configsを
@@ -1336,8 +1320,7 @@ impl App {
                             state.events.extend(events);
                             state.next_forward_token = next_token;
                             if state.auto_scroll {
-                                state.scroll_offset =
-                                    state.events.len().saturating_sub(1);
+                                state.scroll_offset = state.events.len().saturating_sub(1);
                             }
                             // 検索クエリがあればマッチを再計算
                             if !state.search_query.is_empty() {

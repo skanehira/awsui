@@ -7,6 +7,10 @@ pub struct Cli {
     /// Allow delete operations. Without value: all services. With value: comma-separated service names (ec2,ecr,ecs,s3,vpc,secrets)
     #[arg(long, value_name = "SERVICES", num_args = 0..=1, default_missing_value = "__all__")]
     pub allow_delete: Option<String>,
+
+    /// Skip interactive profile selection and use the specified profile
+    #[arg(long)]
+    pub profile: Option<String>,
 }
 
 /// 削除権限の状態

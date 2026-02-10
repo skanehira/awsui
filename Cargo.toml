@@ -28,8 +28,13 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tui-input = { version = "0.11.1", features = ["crossterm"] }
 
+[features]
+mock-data = []
+
 [dev-dependencies]
 insta = "1.46"
 mockall = "0.13"
+portable-pty = "0.8"
 pretty_assertions = "1"
 rstest = "0.26"
+vt100 = "0.15"

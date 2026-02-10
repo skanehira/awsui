@@ -12,3 +12,8 @@ pub mod secrets_client;
 pub mod secrets_model;
 pub mod vpc_client;
 pub mod vpc_model;
+
+#[cfg(feature = "mock-data")]
+pub mod mock_clients;
+#[cfg(feature = "mock-data")]
+pub mod mock_data;

@@ -59,10 +59,7 @@ pub fn render(
 
         let search_info = if !log_state.search_query.is_empty() {
             let match_count = log_state.search_matches.len();
-            let current = log_state
-                .current_match_index
-                .map(|i| i + 1)
-                .unwrap_or(0);
+            let current = log_state.current_match_index.map(|i| i + 1).unwrap_or(0);
             format!(" [{}/{}]", current, match_count)
         } else {
             String::new()
@@ -118,8 +115,7 @@ fn render_log_content(frame: &mut Frame, log_state: &LogViewState, area: Rect) {
             };
 
             if is_match {
-                let msg_spans =
-                    highlight_matches(msg_line, &log_state.search_query, match_style);
+                let msg_spans = highlight_matches(msg_line, &log_state.search_query, match_style);
                 let mut spans = vec![time_part];
                 spans.extend(msg_spans);
                 all_lines.push(Line::from(spans));
@@ -154,10 +150,7 @@ fn highlight_matches<'a>(
         if start > last {
             spans.push(Span::raw(&message[last..start]));
         }
-        spans.push(Span::styled(
-            &message[start..start + query.len()],
-            style,
-        ));
+        spans.push(Span::styled(&message[start..start + query.len()], style));
         last = start + query.len();
     }
     if last < message.len() {
