@@ -11,3 +11,4 @@ pub mod service;
 pub mod sso;
 pub mod tab;
 pub mod tui;
+pub mod ui_state;
