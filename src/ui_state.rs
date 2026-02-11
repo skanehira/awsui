@@ -1,13 +1,14 @@
 use tui_input::Input;
 
 use crate::service::ServiceKind;
+use crate::tab::TabView;
 
 /// ナビゲーションスタックのエントリ
 /// リンクフォロー時に遷移元の状態を保存する
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationEntry {
-    /// 遷移元のビュー
-    pub view: View,
+    /// 遷移元のビュー (ServiceKind, TabView)
+    pub view: (ServiceKind, TabView),
     /// 遷移元のリスト選択インデックス
     pub selected_index: usize,
     /// 遷移元の詳細タグインデックス
@@ -161,24 +162,6 @@ impl PartialEq for DangerConfirmContext {
 }
 
 impl Eq for DangerConfirmContext {}
-
-/// 現在の画面
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum View {
-    ServiceSelect,
-    Ec2List,
-    Ec2Detail,
-    EcrList,
-    EcrDetail,
-    EcsList,
-    EcsDetail,
-    S3List,
-    S3Detail,
-    VpcList,
-    VpcDetail,
-    SecretsList,
-    SecretsDetail,
-}
 
 /// 詳細画面のタブ
 #[derive(Debug, Clone, PartialEq, Eq)]

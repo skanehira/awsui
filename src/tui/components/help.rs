@@ -3,23 +3,24 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
-use crate::app::View;
+use crate::service::ServiceKind;
+use crate::tab::TabView;
 use crate::tui::components::dialog::centered_rect;
 use crate::tui::theme;
 
 /// ヘルプポップアップWidget
-pub struct HelpPopup<'a> {
-    view: &'a View,
+pub struct HelpPopup {
+    view: (ServiceKind, TabView),
 }
 
-impl<'a> HelpPopup<'a> {
-    pub fn new(view: &'a View) -> Self {
+impl HelpPopup {
+    pub fn new(view: (ServiceKind, TabView)) -> Self {
         Self { view }
     }
 
-    fn action_lines(&self) -> Vec<Line<'a>> {
+    fn action_lines(&self) -> Vec<Line<'static>> {
         match self.view {
-            View::Ec2List => vec![
+            (ServiceKind::Ec2, TabView::List) => vec![
                 Line::from("    S          Start/Stop instance"),
                 Line::from("    R          Reboot instance"),
                 Line::from("    D          Terminate instance"),
@@ -27,50 +28,53 @@ impl<'a> HelpPopup<'a> {
                 Line::from("    y          Copy ID"),
                 Line::from("    /          Filter"),
             ],
-            View::Ec2Detail => vec![
+            (ServiceKind::Ec2, TabView::Detail) => vec![
                 Line::from("    S          Start/Stop instance"),
                 Line::from("    R          Reboot instance"),
                 Line::from("    y          Copy ID"),
                 Line::from("    ]          Switch tab"),
                 Line::from("    Enter      Follow link"),
             ],
-            View::S3List => vec![
+            (ServiceKind::S3, TabView::List) => vec![
                 Line::from("    c          Create bucket"),
                 Line::from("    D          Delete bucket"),
                 Line::from("    r          Refresh list"),
                 Line::from("    y          Copy ID"),
                 Line::from("    /          Filter"),
             ],
-            View::S3Detail => vec![
+            (ServiceKind::S3, TabView::Detail) => vec![
                 Line::from("    Enter      Open directory"),
                 Line::from("    D          Delete object"),
             ],
-            View::SecretsList => vec![
+            (ServiceKind::SecretsManager, TabView::List) => vec![
                 Line::from("    c          Create secret"),
                 Line::from("    D          Delete secret"),
                 Line::from("    r          Refresh list"),
                 Line::from("    y          Copy ID"),
                 Line::from("    /          Filter"),
             ],
-            View::SecretsDetail => vec![
+            (ServiceKind::SecretsManager, TabView::Detail) => vec![
                 Line::from("    e          Edit secret value"),
                 Line::from("    y          Copy ID"),
                 Line::from("    ]          Switch tab"),
             ],
-            View::EcrList | View::EcsList | View::VpcList => vec![
+            (ServiceKind::Ecr, TabView::List)
+            | (ServiceKind::Ecs, TabView::List)
+            | (ServiceKind::Vpc, TabView::List) => vec![
                 Line::from("    r          Refresh list"),
                 Line::from("    y          Copy ID"),
                 Line::from("    /          Filter"),
             ],
-            View::EcrDetail | View::EcsDetail | View::VpcDetail => {
+            (ServiceKind::Ecr, TabView::Detail)
+            | (ServiceKind::Ecs, TabView::Detail)
+            | (ServiceKind::Vpc, TabView::Detail) => {
                 vec![Line::from("    y          Copy ID")]
             }
-            View::ServiceSelect => vec![],
         }
     }
 }
 
-impl<'a> Widget for HelpPopup<'a> {
+impl Widget for HelpPopup {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let action_lines = self.action_lines();
         // Navigation(7) + Actions(2+N) + Tabs(6) + General(6) + borders(2)
@@ -124,9 +128,10 @@ impl<'a> Widget for HelpPopup<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::View;
+    use crate::service::ServiceKind;
+    use crate::tab::TabView;
 
-    fn render_help(view: &View) -> String {
+    fn render_help(view: (ServiceKind, TabView)) -> String {
         let area = Rect::new(0, 0, 80, 30);
         let mut buf = Buffer::empty(area);
         HelpPopup::new(view).render(area, &mut buf);
@@ -143,7 +148,7 @@ mod tests {
 
     #[test]
     fn help_popup_render_returns_navigation_section_when_rendered() {
-        let content = render_help(&View::Ec2List);
+        let content = render_help((ServiceKind::Ec2, TabView::List));
         assert!(content.contains("Navigation"));
         assert!(content.contains("j/k"));
         assert!(content.contains("Move down/up"));
@@ -151,7 +156,7 @@ mod tests {
 
     #[test]
     fn help_popup_render_returns_general_section_when_rendered() {
-        let content = render_help(&View::Ec2List);
+        let content = render_help((ServiceKind::Ec2, TabView::List));
         assert!(content.contains("General"));
         assert!(content.contains("Quit"));
         assert!(content.contains("Press Esc to close"));
@@ -160,7 +165,7 @@ mod tests {
     // EC2 List: S(Start/Stop), R(Reboot), D(Terminate), r, y, /
     #[test]
     fn help_popup_render_returns_ec2_actions_when_ec2_list() {
-        let content = render_help(&View::Ec2List);
+        let content = render_help((ServiceKind::Ec2, TabView::List));
         assert!(content.contains("Start/Stop"));
         assert!(content.contains("Reboot"));
         assert!(content.contains("Terminate"));
@@ -172,7 +177,7 @@ mod tests {
     // EC2 Detail: S(Start/Stop), R(Reboot), y, ](Switch tab), Enter(follow-link)
     #[test]
     fn help_popup_render_returns_ec2_detail_actions_when_ec2_detail() {
-        let content = render_help(&View::Ec2Detail);
+        let content = render_help((ServiceKind::Ec2, TabView::Detail));
         assert!(content.contains("Start/Stop"));
         assert!(content.contains("Reboot"));
         assert!(content.contains("Copy"));
@@ -186,7 +191,7 @@ mod tests {
     // S3 List: c(Create), D(Delete), r, y, /
     #[test]
     fn help_popup_render_returns_s3_actions_when_s3_list() {
-        let content = render_help(&View::S3List);
+        let content = render_help((ServiceKind::S3, TabView::List));
         assert!(content.contains("Create"));
         assert!(content.contains("Delete"));
         assert!(content.contains("Refresh"));
@@ -199,7 +204,7 @@ mod tests {
     // Secrets List: c(Create), D(Delete), r, y, /
     #[test]
     fn help_popup_render_returns_secrets_actions_when_secrets_list() {
-        let content = render_help(&View::SecretsList);
+        let content = render_help((ServiceKind::SecretsManager, TabView::List));
         assert!(content.contains("Create"));
         assert!(content.contains("Delete"));
         assert!(content.contains("Refresh"));
@@ -211,7 +216,7 @@ mod tests {
     // Secrets Detail: e(Edit), y, ](Switch tab)
     #[test]
     fn help_popup_render_returns_secrets_detail_actions_when_secrets_detail() {
-        let content = render_help(&View::SecretsDetail);
+        let content = render_help((ServiceKind::SecretsManager, TabView::Detail));
         assert!(content.contains("Edit"));
         assert!(content.contains("Copy"));
         assert!(content.contains("]"));
@@ -222,7 +227,7 @@ mod tests {
     // Generic List (ECR, ECS, VPC): r, y, /のみ
     #[test]
     fn help_popup_render_returns_generic_actions_when_ecr_list() {
-        let content = render_help(&View::EcrList);
+        let content = render_help((ServiceKind::Ecr, TabView::List));
         assert!(content.contains("Refresh"));
         assert!(content.contains("Copy"));
         assert!(content.contains("Filter"));
@@ -235,7 +240,7 @@ mod tests {
     // S3 Detail: Enter(open dir), D(Delete)
     #[test]
     fn help_popup_render_returns_s3_detail_actions_when_s3_detail() {
-        let content = render_help(&View::S3Detail);
+        let content = render_help((ServiceKind::S3, TabView::Detail));
         assert!(content.contains("Open"));
         assert!(content.contains("Delete"));
         assert!(!content.contains("Start/Stop"));
@@ -245,7 +250,7 @@ mod tests {
     // Generic Detail (ECR, ECS, VPC): y のみ
     #[test]
     fn help_popup_render_returns_generic_detail_actions_when_ecr_detail() {
-        let content = render_help(&View::EcrDetail);
+        let content = render_help((ServiceKind::Ecr, TabView::Detail));
         assert!(content.contains("Copy"));
         assert!(!content.contains("Start/Stop"));
         assert!(!content.contains("Filter"));

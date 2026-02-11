@@ -2,7 +2,9 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use tui_input::backend::crossterm::to_input_request;
 
 use crate::action::Action;
-use crate::app::{App, Mode, View};
+use crate::app::{App, Mode};
+use crate::service::ServiceKind;
+use crate::tab::TabView;
 
 /// キーイベントをActionに変換する。
 /// Appの現在のmode/viewに応じて適切なActionを返す。
@@ -58,34 +60,31 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
     }
 
     // View別のハンドリング
-    let Some(view) = app.current_view() else {
-        return Action::Noop;
-    };
     let mode = &tab.mode;
-    match view {
-        View::ServiceSelect => match mode {
-            Mode::Filter => handle_filter_key(key),
-            _ => handle_service_select_key(key),
-        },
-        View::Ec2List => match mode {
+    match (tab.service, tab.tab_view) {
+        (ServiceKind::Ec2, TabView::List) => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_ec2_list_key(key),
         },
-        View::EcrList | View::EcsList | View::VpcList => match mode {
+        (ServiceKind::Ecr, TabView::List)
+        | (ServiceKind::Ecs, TabView::List)
+        | (ServiceKind::Vpc, TabView::List) => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_generic_list_key(key),
         },
-        View::S3List => match mode {
+        (ServiceKind::S3, TabView::List) => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_s3_list_key(key),
         },
-        View::SecretsList => match mode {
+        (ServiceKind::SecretsManager, TabView::List) => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_secrets_list_key(key),
         },
-        View::Ec2Detail => handle_ec2_detail_key(key),
-        View::EcrDetail | View::VpcDetail => handle_generic_detail_key(key),
-        View::EcsDetail => {
+        (ServiceKind::Ec2, TabView::Detail) => handle_ec2_detail_key(key),
+        (ServiceKind::Ecr, TabView::Detail) | (ServiceKind::Vpc, TabView::Detail) => {
+            handle_generic_detail_key(key)
+        }
+        (ServiceKind::Ecs, TabView::Detail) => {
             // ログビュー表示中は専用ハンドラー
             if let crate::tab::ServiceData::Ecs { log_state, .. } = &tab.data
                 && log_state.is_some()
@@ -97,8 +96,8 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
             }
             handle_ecs_detail_key(key)
         }
-        View::S3Detail => handle_s3_detail_key(key),
-        View::SecretsDetail => handle_secrets_detail_key(key),
+        (ServiceKind::S3, TabView::Detail) => handle_s3_detail_key(key),
+        (ServiceKind::SecretsManager, TabView::Detail) => handle_secrets_detail_key(key),
     }
 }
 
@@ -465,32 +464,13 @@ mod tests {
         key(KeyCode::Char(c))
     }
 
-    /// ViewからServiceKindとTabViewに変換
-    fn view_to_service(view: &View) -> (ServiceKind, TabView) {
-        match view {
-            View::Ec2List => (ServiceKind::Ec2, TabView::List),
-            View::Ec2Detail => (ServiceKind::Ec2, TabView::Detail),
-            View::EcrList => (ServiceKind::Ecr, TabView::List),
-            View::EcrDetail => (ServiceKind::Ecr, TabView::Detail),
-            View::EcsList => (ServiceKind::Ecs, TabView::List),
-            View::EcsDetail => (ServiceKind::Ecs, TabView::Detail),
-            View::S3List => (ServiceKind::S3, TabView::List),
-            View::S3Detail => (ServiceKind::S3, TabView::Detail),
-            View::VpcList => (ServiceKind::Vpc, TabView::List),
-            View::VpcDetail => (ServiceKind::Vpc, TabView::Detail),
-            View::SecretsList => (ServiceKind::SecretsManager, TabView::List),
-            View::SecretsDetail => (ServiceKind::SecretsManager, TabView::Detail),
-            View::ServiceSelect => unreachable!("ServiceSelect has no tab"),
-        }
-    }
-
-    fn app_with_view(view: View) -> App {
+    /// ビュー指定でアプリを作成。Noneはダッシュボード。
+    fn app_with_view(view: Option<(ServiceKind, TabView)>) -> App {
         let mut app = App::new("dev".to_string(), None);
-        if view == View::ServiceSelect {
+        let Some((service, tab_view)) = view else {
             // show_dashboard is true by default
             return app;
-        }
-        let (service, tab_view) = view_to_service(&view);
+        };
         app.create_tab(service);
         if tab_view == TabView::Detail {
             if let Some(tab) = app.active_tab_mut() {
@@ -500,8 +480,8 @@ mod tests {
         app
     }
 
-    fn app_with_mode(view: View, mode: Mode) -> App {
-        let is_service_select = view == View::ServiceSelect;
+    fn app_with_mode(view: Option<(ServiceKind, TabView)>, mode: Mode) -> App {
+        let is_dashboard = view.is_none();
         let mut app = app_with_view(view);
         match mode {
             Mode::Message => {
@@ -515,7 +495,7 @@ mod tests {
                 app.show_help = true;
             }
             _ => {
-                if is_service_select {
+                if is_dashboard {
                     app.dashboard.mode = mode;
                 } else if let Some(tab) = app.active_tab_mut() {
                     tab.mode = mode;
@@ -544,7 +524,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::ServiceSelect);
+        let app = app_with_view(None);
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -573,19 +553,19 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::Ec2List);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
     #[test]
     fn handle_key_returns_half_page_down_when_ctrl_d_in_ec2_list() {
-        let app = app_with_view(View::Ec2List);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         assert_eq!(handle_key(&app, key_with_ctrl('d')), Action::HalfPageDown);
     }
 
     #[test]
     fn handle_key_returns_half_page_up_when_ctrl_u_in_ec2_list() {
-        let app = app_with_view(View::Ec2List);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         assert_eq!(handle_key(&app, key_with_ctrl('u')), Action::HalfPageUp);
     }
 
@@ -606,7 +586,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::EcrList);
+        let app = app_with_view(Some((ServiceKind::Ecr, TabView::List)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -621,20 +601,20 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_mode(View::Ec2List, Mode::Filter);
+        let app = app_with_mode(Some((ServiceKind::Ec2, TabView::List)), Mode::Filter);
         assert_eq!(handle_key(&app, input), expected);
     }
 
     #[test]
     fn handle_key_returns_filter_handle_input_when_char_in_filter() {
-        let app = app_with_mode(View::Ec2List, Mode::Filter);
+        let app = app_with_mode(Some((ServiceKind::Ec2, TabView::List)), Mode::Filter);
         let action = handle_key(&app, key_char('a'));
         assert!(matches!(action, Action::FilterHandleInput(_)));
     }
 
     #[test]
     fn handle_key_returns_filter_handle_input_when_backspace_in_filter() {
-        let app = app_with_mode(View::Ec2List, Mode::Filter);
+        let app = app_with_mode(Some((ServiceKind::Ec2, TabView::List)), Mode::Filter);
         let action = handle_key(&app, key(KeyCode::Backspace));
         assert!(matches!(action, Action::FilterHandleInput(_)));
     }
@@ -661,7 +641,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::Ec2Detail);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::Detail)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -686,7 +666,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::EcsDetail);
+        let app = app_with_view(Some((ServiceKind::Ecs, TabView::Detail)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -704,7 +684,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::S3Detail);
+        let app = app_with_view(Some((ServiceKind::S3, TabView::Detail)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -723,7 +703,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::SecretsDetail);
+        let app = app_with_view(Some((ServiceKind::SecretsManager, TabView::Detail)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -741,7 +721,7 @@ mod tests {
         #[case] expected: Action,
     ) {
         let app = app_with_mode(
-            View::Ec2List,
+            Some((ServiceKind::Ec2, TabView::List)),
             Mode::Confirm(ConfirmAction::Stop("i-123".to_string())),
         );
         assert_eq!(handle_key(&app, input), expected);
@@ -759,7 +739,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_mode(View::Ec2List, Mode::Message);
+        let app = app_with_mode(Some((ServiceKind::Ec2, TabView::List)), Mode::Message);
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -775,7 +755,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_mode(View::Ec2List, Mode::Help);
+        let app = app_with_mode(Some((ServiceKind::Ec2, TabView::List)), Mode::Help);
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -786,7 +766,7 @@ mod tests {
     #[test]
     fn handle_key_returns_confirm_yes_when_confirm_dialog_overrides_view_keys() {
         let app = app_with_mode(
-            View::Ec2List,
+            Some((ServiceKind::Ec2, TabView::List)),
             Mode::Confirm(ConfirmAction::Start("i-123".to_string())),
         );
         assert_eq!(handle_key(&app, key_char('y')), Action::ConfirmYes);
@@ -794,7 +774,7 @@ mod tests {
 
     #[test]
     fn handle_key_returns_dismiss_message_when_message_overrides_view_keys() {
-        let app = app_with_mode(View::Ec2List, Mode::Message);
+        let app = app_with_mode(Some((ServiceKind::Ec2, TabView::List)), Mode::Message);
         assert_eq!(
             handle_key(&app, key(KeyCode::Enter)),
             Action::DismissMessage
@@ -820,7 +800,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::S3List);
+        let app = app_with_view(Some((ServiceKind::S3, TabView::List)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -843,7 +823,7 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_view(View::SecretsList);
+        let app = app_with_view(Some((ServiceKind::SecretsManager, TabView::List)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -853,7 +833,7 @@ mod tests {
 
     #[test]
     fn handle_key_returns_delete_when_shift_d_in_ec2_list() {
-        let app = app_with_view(View::Ec2List);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         assert_eq!(
             handle_key(&app, KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
             Action::Delete,
@@ -866,7 +846,7 @@ mod tests {
 
     #[test]
     fn handle_key_returns_delete_when_shift_d_in_s3_detail() {
-        let app = app_with_view(View::S3Detail);
+        let app = app_with_view(Some((ServiceKind::S3, TabView::Detail)));
         assert_eq!(
             handle_key(&app, KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
             Action::Delete,
@@ -879,7 +859,7 @@ mod tests {
 
     #[test]
     fn handle_key_returns_edit_when_e_in_secrets_detail() {
-        let app = app_with_view(View::SecretsDetail);
+        let app = app_with_view(Some((ServiceKind::SecretsManager, TabView::Detail)));
         assert_eq!(handle_key(&app, key_char('e')), Action::Edit);
     }
 
@@ -898,7 +878,7 @@ mod tests {
         use crate::app::{FormContext, FormField, FormKind};
         use tui_input::Input;
         let app = app_with_mode(
-            View::S3List,
+            Some((ServiceKind::S3, TabView::List)),
             Mode::Form(FormContext {
                 kind: FormKind::CreateS3Bucket,
                 fields: vec![FormField {
@@ -917,7 +897,7 @@ mod tests {
         use crate::app::{FormContext, FormField, FormKind};
         use tui_input::Input;
         let app = app_with_mode(
-            View::S3List,
+            Some((ServiceKind::S3, TabView::List)),
             Mode::Form(FormContext {
                 kind: FormKind::CreateS3Bucket,
                 fields: vec![FormField {
@@ -946,7 +926,7 @@ mod tests {
         use crate::app::{DangerAction, DangerConfirmContext};
         use tui_input::Input;
         let app = app_with_mode(
-            View::Ec2List,
+            Some((ServiceKind::Ec2, TabView::List)),
             Mode::DangerConfirm(DangerConfirmContext {
                 action: DangerAction::TerminateEc2("i-001".to_string()),
                 input: Input::default(),
@@ -960,7 +940,7 @@ mod tests {
         use crate::app::{DangerAction, DangerConfirmContext};
         use tui_input::Input;
         let app = app_with_mode(
-            View::Ec2List,
+            Some((ServiceKind::Ec2, TabView::List)),
             Mode::DangerConfirm(DangerConfirmContext {
                 action: DangerAction::TerminateEc2("i-001".to_string()),
                 input: Input::default(),
@@ -979,7 +959,7 @@ mod tests {
         use crate::app::{FormContext, FormField, FormKind};
         use tui_input::Input;
         let app = app_with_mode(
-            View::S3List,
+            Some((ServiceKind::S3, TabView::List)),
             Mode::Form(FormContext {
                 kind: FormKind::CreateS3Bucket,
                 fields: vec![FormField {
@@ -998,7 +978,7 @@ mod tests {
         use crate::app::{DangerAction, DangerConfirmContext};
         use tui_input::Input;
         let app = app_with_mode(
-            View::Ec2List,
+            Some((ServiceKind::Ec2, TabView::List)),
             Mode::DangerConfirm(DangerConfirmContext {
                 action: DangerAction::TerminateEc2("i-001".to_string()),
                 input: Input::default(),
@@ -1021,13 +1001,13 @@ mod tests {
         #[case] input: KeyEvent,
         #[case] expected: Action,
     ) {
-        let app = app_with_mode(View::ServiceSelect, Mode::Filter);
+        let app = app_with_mode(None, Mode::Filter);
         assert_eq!(handle_key(&app, input), expected);
     }
 
     #[test]
     fn handle_key_returns_filter_handle_input_when_char_in_service_filter() {
-        let app = app_with_mode(View::ServiceSelect, Mode::Filter);
+        let app = app_with_mode(None, Mode::Filter);
         let action = handle_key(&app, key_char('s'));
         assert!(matches!(action, Action::FilterHandleInput(_)));
     }
@@ -1038,19 +1018,19 @@ mod tests {
 
     #[test]
     fn handle_key_returns_next_tab_when_tab_key_in_normal_mode() {
-        let app = app_with_view(View::Ec2List);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         assert_eq!(handle_key(&app, key(KeyCode::Tab)), Action::NextTab);
     }
 
     #[test]
     fn handle_key_returns_prev_tab_when_backtab_in_normal_mode() {
-        let app = app_with_view(View::Ec2List);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         assert_eq!(handle_key(&app, key(KeyCode::BackTab)), Action::PrevTab);
     }
 
     #[test]
     fn handle_key_returns_close_tab_when_ctrl_w_in_normal_mode() {
-        let app = app_with_view(View::Ec2List);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         assert_eq!(
             handle_key(
                 &app,
@@ -1062,7 +1042,7 @@ mod tests {
 
     #[test]
     fn handle_key_returns_new_tab_when_ctrl_t_in_normal_mode() {
-        let app = app_with_view(View::Ec2List);
+        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         assert_eq!(
             handle_key(
                 &app,
@@ -1074,7 +1054,7 @@ mod tests {
 
     #[test]
     fn handle_key_returns_noop_when_tab_key_in_filter_mode() {
-        let app = app_with_mode(View::Ec2List, Mode::Filter);
+        let app = app_with_mode(Some((ServiceKind::Ec2, TabView::List)), Mode::Filter);
         // Filterモードでは Tab はタブ操作にならない
         assert_eq!(handle_key(&app, key(KeyCode::Tab)), Action::Noop);
     }
@@ -1084,7 +1064,7 @@ mod tests {
     // ──────────────────────────────────────────────
 
     fn app_with_picker() -> App {
-        let mut app = app_with_view(View::Ec2List);
+        let mut app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
         app.dispatch(Action::NewTab); // ピッカーを開く
         app
     }
@@ -1136,7 +1116,7 @@ mod tests {
         use crate::aws::logs_model::LogEvent;
         use crate::tab::LogViewState;
 
-        let mut app = app_with_view(View::EcsDetail);
+        let mut app = app_with_view(Some((ServiceKind::Ecs, TabView::Detail)));
         if let Some(tab) = app.active_tab_mut() {
             if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data {
                 *log_state = Some(Box::new(LogViewState {

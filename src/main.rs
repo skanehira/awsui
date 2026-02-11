@@ -1,7 +1,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use awsui::app::{App, ConfirmAction, Mode, View};
+use awsui::app::{App, ConfirmAction, Mode};
 use awsui::aws::client::Ec2Client;
 use awsui::aws::ecr_client::EcrClient;
 use awsui::aws::ecs_client::EcsClient;
@@ -18,8 +18,10 @@ use awsui::aws::{
 use awsui::cli::{Cli, DeletePermissions};
 use awsui::config;
 use awsui::event::{AppEvent, TabEvent};
+use awsui::service::ServiceKind;
 use awsui::sso::{self, SsoTokenStatus};
 use awsui::tab::TabId;
+use awsui::tab::TabView;
 use awsui::tui::components::dialog::{ConfirmDialog, MessageDialog};
 use awsui::tui::components::form_dialog::{DangerConfirmDialog, FormDialog};
 use awsui::tui::components::help::HelpPopup;
@@ -266,9 +268,13 @@ fn render_tab_content(
     area: ratatui::layout::Rect,
 ) {
     match app.current_view() {
-        Some(View::Ec2List) => awsui::tui::views::ec2_list::render(frame, app, spinner_tick, area),
-        Some(View::Ec2Detail) => awsui::tui::views::ec2_detail::render(frame, app, area),
-        Some(View::EcrList) => {
+        Some((ServiceKind::Ec2, TabView::List)) => {
+            awsui::tui::views::ec2_list::render(frame, app, spinner_tick, area)
+        }
+        Some((ServiceKind::Ec2, TabView::Detail)) => {
+            awsui::tui::views::ec2_detail::render(frame, app, area)
+        }
+        Some((ServiceKind::Ecr, TabView::List)) => {
             if let awsui::tab::ServiceData::Ecr {
                 filtered_repositories,
                 ..
@@ -288,7 +294,7 @@ fn render_tab_content(
                 );
             }
         }
-        Some(View::EcrDetail) => {
+        Some((ServiceKind::Ecr, TabView::Detail)) => {
             if let awsui::tab::ServiceData::Ecr {
                 filtered_repositories,
                 images,
@@ -309,7 +315,7 @@ fn render_tab_content(
                 );
             }
         }
-        Some(View::EcsList) => {
+        Some((ServiceKind::Ecs, TabView::List)) => {
             if let awsui::tab::ServiceData::Ecs {
                 filtered_clusters, ..
             } = &tab.data
@@ -325,7 +331,7 @@ fn render_tab_content(
                 awsui::tui::views::ecs_list::render(frame, &props, area);
             }
         }
-        Some(View::EcsDetail) => {
+        Some((ServiceKind::Ecs, TabView::Detail)) => {
             if let awsui::tab::ServiceData::Ecs {
                 filtered_clusters,
                 services,
@@ -380,7 +386,7 @@ fn render_tab_content(
                 }
             }
         }
-        Some(View::S3List) => {
+        Some((ServiceKind::S3, TabView::List)) => {
             if let awsui::tab::ServiceData::S3 {
                 filtered_buckets, ..
             } = &tab.data
@@ -399,7 +405,7 @@ fn render_tab_content(
                 );
             }
         }
-        Some(View::S3Detail) => {
+        Some((ServiceKind::S3, TabView::Detail)) => {
             if let awsui::tab::ServiceData::S3 {
                 objects,
                 selected_bucket,
@@ -420,7 +426,7 @@ fn render_tab_content(
                 );
             }
         }
-        Some(View::VpcList) => {
+        Some((ServiceKind::Vpc, TabView::List)) => {
             if let awsui::tab::ServiceData::Vpc { filtered_vpcs, .. } = &tab.data {
                 awsui::tui::views::vpc_list::render(
                     frame,
@@ -436,7 +442,7 @@ fn render_tab_content(
                 );
             }
         }
-        Some(View::VpcDetail) => {
+        Some((ServiceKind::Vpc, TabView::Detail)) => {
             if let awsui::tab::ServiceData::Vpc {
                 filtered_vpcs,
                 subnets,
@@ -455,7 +461,7 @@ fn render_tab_content(
                 );
             }
         }
-        Some(View::SecretsList) => {
+        Some((ServiceKind::SecretsManager, TabView::List)) => {
             if let awsui::tab::ServiceData::Secrets {
                 filtered_secrets, ..
             } = &tab.data
@@ -474,7 +480,7 @@ fn render_tab_content(
                 );
             }
         }
-        Some(View::SecretsDetail) => {
+        Some((ServiceKind::SecretsManager, TabView::Detail)) => {
             if let awsui::tab::ServiceData::Secrets {
                 detail,
                 detail_tab,
@@ -495,7 +501,7 @@ fn render_tab_content(
                 );
             }
         }
-        Some(View::ServiceSelect) | None => {}
+        None => {}
     }
 }
 
@@ -553,7 +559,7 @@ fn render_global_overlays(frame: &mut Frame, app: &App) {
     if app.show_help
         && let Some(view) = app.current_view()
     {
-        let help = HelpPopup::new(&view);
+        let help = HelpPopup::new(view);
         frame.render_widget(help, frame.area());
     }
 }
@@ -575,7 +581,7 @@ async fn handle_side_effects(
     app: &mut App,
     clients: &mut Clients,
     confirmed: Option<ConfirmAction>,
-    prev_view: &Option<View>,
+    prev_view: &Option<(ServiceKind, TabView)>,
     prev_tab_id: Option<TabId>,
     action_clone: &awsui::action::Action,
 ) {
@@ -624,9 +630,7 @@ async fn handle_side_effects(
     // - prev_tab_id != tab_id: ピッカーから新規タブ作成
     if tab_loading
         && tab_view == awsui::tab::TabView::List
-        && (prev_view.is_none()
-            || matches!(prev_view, Some(View::ServiceSelect))
-            || prev_tab_id != Some(tab_id))
+        && (prev_view.is_none() || prev_tab_id != Some(tab_id))
     {
         create_client_and_load(app, clients, tab_id).await;
         return;
@@ -643,25 +647,30 @@ async fn handle_side_effects(
         }
 
         // ECSタスク読み込み（サービス詳細遷移時）
-        if was_same_detail && matches!(current_view, Some(View::EcsDetail)) {
+        if was_same_detail && matches!(current_view, Some((ServiceKind::Ecs, TabView::Detail))) {
             load_ecs_tasks(app, clients, tab_id);
             return;
         }
 
         // S3プレフィックスナビゲーション（S3Detail → S3Detail）
-        if was_same_detail && matches!(current_view, Some(View::S3Detail)) {
+        if was_same_detail && matches!(current_view, Some((ServiceKind::S3, TabView::Detail))) {
             load_s3_objects(app, clients, tab_id);
             return;
         }
 
         // ナビゲーションリンク（EC2 Detail → VPC Detail）
-        if was_same_detail && matches!(current_view, Some(View::VpcDetail)) {
+        if was_same_detail && matches!(current_view, Some((ServiceKind::Vpc, TabView::Detail))) {
             handle_navigation_link(app, clients, tab_id).await;
             return;
         }
 
         // シークレット値取得（SecretsDetail → SecretsDetail, loading=true）
-        if was_same_detail && matches!(current_view, Some(View::SecretsDetail)) {
+        if was_same_detail
+            && matches!(
+                current_view,
+                Some((ServiceKind::SecretsManager, TabView::Detail))
+            )
+        {
             load_secret_value(app, clients, tab_id);
             return;
         }
@@ -1172,11 +1181,7 @@ async fn handle_navigation_link(app: &mut App, clients: &mut Clients, tab_id: Ta
                     // クライアント作成失敗時はスタックを巻き戻す
                     if let Some(tab) = app.find_tab_mut(tab_id) {
                         if let Some(entry) = tab.navigation_stack.pop() {
-                            tab.tab_view = match (entry.view.clone(), tab.service) {
-                                (View::Ec2List, _) => awsui::tab::TabView::List,
-                                (View::Ec2Detail, _) => awsui::tab::TabView::Detail,
-                                _ => awsui::tab::TabView::Detail,
-                            };
+                            tab.tab_view = entry.view.1;
                             tab.selected_index = entry.selected_index;
                             tab.detail_tag_index = entry.detail_tag_index;
                             tab.detail_tab = entry.detail_tab;
@@ -1490,12 +1495,12 @@ fn trigger_refresh(app: &App, clients: &Clients) {
     let tx = app.event_tx.clone();
 
     match app.current_view() {
-        Some(View::Ec2List) => {
+        Some((ServiceKind::Ec2, TabView::List)) => {
             if let Some(client) = &clients.ec2 {
                 load_instances(&tx, client.clone(), tab_id);
             }
         }
-        Some(View::S3List) => {
+        Some((ServiceKind::S3, TabView::List)) => {
             if let Some(client) = &clients.s3 {
                 let c = client.clone();
                 tokio::spawn(async move {
@@ -1506,7 +1511,7 @@ fn trigger_refresh(app: &App, clients: &Clients) {
                 });
             }
         }
-        Some(View::S3Detail) => {
+        Some((ServiceKind::S3, TabView::Detail)) => {
             if let awsui::tab::ServiceData::S3 {
                 selected_bucket,
                 current_prefix,
@@ -1529,7 +1534,7 @@ fn trigger_refresh(app: &App, clients: &Clients) {
                 });
             }
         }
-        Some(View::SecretsList) => {
+        Some((ServiceKind::SecretsManager, TabView::List)) => {
             if let Some(client) = &clients.secrets {
                 let c = client.clone();
                 tokio::spawn(async move {
@@ -1540,7 +1545,7 @@ fn trigger_refresh(app: &App, clients: &Clients) {
                 });
             }
         }
-        Some(View::SecretsDetail) => {
+        Some((ServiceKind::SecretsManager, TabView::Detail)) => {
             if let awsui::tab::ServiceData::Secrets { detail, .. } = &tab.data
                 && let Some(detail) = detail
                 && let Some(client) = &clients.secrets
@@ -1562,28 +1567,12 @@ fn trigger_refresh(app: &App, clients: &Clients) {
     }
 }
 
-fn is_list_view(view: &View) -> bool {
-    matches!(
-        view,
-        View::Ec2List
-            | View::EcrList
-            | View::EcsList
-            | View::S3List
-            | View::VpcList
-            | View::SecretsList
-    )
+fn is_list_view(view: &(ServiceKind, TabView)) -> bool {
+    view.1 == TabView::List
 }
 
-fn is_detail_view(view: &View) -> bool {
-    matches!(
-        view,
-        View::Ec2Detail
-            | View::EcrDetail
-            | View::EcsDetail
-            | View::S3Detail
-            | View::VpcDetail
-            | View::SecretsDetail
-    )
+fn is_detail_view(view: &(ServiceKind, TabView)) -> bool {
+    view.1 == TabView::Detail
 }
 
 /// ECSタスク定義のログ設定を取得する

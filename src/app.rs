@@ -229,24 +229,10 @@ impl App {
         }
     }
 
-    /// アクティブタブの(service, tab_view)からViewを導出する
-    pub fn current_view(&self) -> Option<View> {
+    /// アクティブタブの(service, tab_view)を返す
+    pub fn current_view(&self) -> Option<(ServiceKind, crate::tab::TabView)> {
         let tab = self.active_tab()?;
-        let view = match (tab.service, tab.tab_view) {
-            (ServiceKind::Ec2, crate::tab::TabView::List) => View::Ec2List,
-            (ServiceKind::Ec2, crate::tab::TabView::Detail) => View::Ec2Detail,
-            (ServiceKind::Ecr, crate::tab::TabView::List) => View::EcrList,
-            (ServiceKind::Ecr, crate::tab::TabView::Detail) => View::EcrDetail,
-            (ServiceKind::Ecs, crate::tab::TabView::List) => View::EcsList,
-            (ServiceKind::Ecs, crate::tab::TabView::Detail) => View::EcsDetail,
-            (ServiceKind::S3, crate::tab::TabView::List) => View::S3List,
-            (ServiceKind::S3, crate::tab::TabView::Detail) => View::S3Detail,
-            (ServiceKind::Vpc, crate::tab::TabView::List) => View::VpcList,
-            (ServiceKind::Vpc, crate::tab::TabView::Detail) => View::VpcDetail,
-            (ServiceKind::SecretsManager, crate::tab::TabView::List) => View::SecretsList,
-            (ServiceKind::SecretsManager, crate::tab::TabView::Detail) => View::SecretsDetail,
-        };
-        Some(view)
+        Some((tab.service, tab.tab_view))
     }
 
     /// フィルタを適用
@@ -1265,7 +1251,7 @@ impl App {
             return;
         };
         let form_ctx = match view {
-            View::S3List => Some(FormContext {
+            (ServiceKind::S3, crate::tab::TabView::List) => Some(FormContext {
                 kind: FormKind::CreateS3Bucket,
                 fields: vec![FormField {
                     label: "Bucket Name".to_string(),
@@ -1274,7 +1260,7 @@ impl App {
                 }],
                 focused_field: 0,
             }),
-            View::SecretsList => Some(FormContext {
+            (ServiceKind::SecretsManager, crate::tab::TabView::List) => Some(FormContext {
                 kind: FormKind::CreateSecret,
                 fields: vec![
                     FormField {
@@ -1310,7 +1296,7 @@ impl App {
             return;
         };
         match view {
-            View::Ec2List => {
+            (ServiceKind::Ec2, crate::tab::TabView::List) => {
                 if !self.can_delete("ec2") {
                     self.show_message(
                         MessageLevel::Error,
@@ -1330,7 +1316,7 @@ impl App {
                     });
                 }
             }
-            View::S3List => {
+            (ServiceKind::S3, crate::tab::TabView::List) => {
                 if !self.can_delete("s3") {
                     self.show_message(
                         MessageLevel::Error,
@@ -1361,7 +1347,7 @@ impl App {
                     });
                 }
             }
-            View::S3Detail => {
+            (ServiceKind::S3, crate::tab::TabView::Detail) => {
                 if !self.can_delete("s3") {
                     self.show_message(
                         MessageLevel::Error,
@@ -1398,7 +1384,7 @@ impl App {
                     });
                 }
             }
-            View::SecretsList => {
+            (ServiceKind::SecretsManager, crate::tab::TabView::List) => {
                 if !self.can_delete("secretsmanager") {
                     self.show_message(
                         MessageLevel::Error,
@@ -1438,7 +1424,7 @@ impl App {
         let Some(view) = self.current_view() else {
             return;
         };
-        if view != View::SecretsDetail {
+        if view != (ServiceKind::SecretsManager, crate::tab::TabView::Detail) {
             return;
         }
         let detail_name = self.active_tab().and_then(|tab| {
@@ -1557,7 +1543,7 @@ impl App {
 
         // 現在のビューのラベルを追加
         let current_label = match self.current_view()? {
-            View::VpcDetail => {
+            (ServiceKind::Vpc, crate::tab::TabView::Detail) => {
                 if let crate::tab::ServiceData::Vpc { filtered_vpcs, .. } = &tab.data {
                     filtered_vpcs
                         .first()
@@ -2391,14 +2377,17 @@ mod tests {
     #[test]
     fn current_view_returns_ec2_list_when_ec2_tab_in_list_view() {
         let app = app_with_ec2_tab();
-        assert_eq!(app.current_view(), Some(View::Ec2List));
+        assert_eq!(app.current_view(), Some((ServiceKind::Ec2, TabView::List)));
     }
 
     #[test]
     fn current_view_returns_ec2_detail_when_ec2_tab_in_detail_view() {
         let mut app = app_with_ec2_tab();
         app.active_tab_mut().unwrap().tab_view = TabView::Detail;
-        assert_eq!(app.current_view(), Some(View::Ec2Detail));
+        assert_eq!(
+            app.current_view(),
+            Some((ServiceKind::Ec2, TabView::Detail))
+        );
     }
 
     #[test]
