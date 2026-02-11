@@ -35,12 +35,8 @@ pub struct App {
     // Delete permissions
     pub delete_permissions: DeletePermissions,
 
-    // CRUD pending state (set by dispatch, consumed by main.rs)
-    pub pending_form: Option<FormContext>,
-    pub pending_danger_action: Option<DangerAction>,
-
     // ログ関連の一時状態
-    pub pending_log_configs: Option<(
+    pub(crate) pending_log_configs: Option<(
         crate::tab::TabId,
         Vec<crate::aws::ecs_model::ContainerLogConfig>,
     )>,
@@ -74,8 +70,6 @@ impl App {
             dashboard: DashboardState::new(),
             service_picker: None,
             delete_permissions,
-            pending_form: None,
-            pending_danger_action: None,
             pending_log_configs: None,
             event_tx,
             event_rx,
@@ -286,25 +280,25 @@ impl App {
     }
 
     /// Actionに基づいてApp状態を更新する。
-    /// ConfirmYes時にconfirm_actionを返す（main側でAPI呼び出しに使う）。
-    pub fn dispatch(&mut self, action: Action) -> Option<ConfirmAction> {
+    /// 副作用が必要な場合はSideEffectを返す（main側でAPI呼び出しに使う）。
+    pub fn dispatch(&mut self, action: Action) -> SideEffect {
         // グローバルオーバーレイの処理
         if self.message.is_some() {
             match action {
                 Action::DismissMessage | Action::Back => {
                     self.dismiss_message();
-                    return None;
+                    return SideEffect::None;
                 }
-                _ => return None,
+                _ => return SideEffect::None,
             }
         }
         if self.show_help {
             match action {
                 Action::ShowHelp | Action::Back => {
                     self.show_help = false;
-                    return None;
+                    return SideEffect::None;
                 }
-                _ => return None,
+                _ => return SideEffect::None,
             }
         }
 
@@ -319,9 +313,9 @@ impl App {
                         if let Some(tab) = self.active_tab_mut() {
                             tab.mode = Mode::Normal;
                         }
-                        return None;
+                        return SideEffect::None;
                     }
-                    _ => return None,
+                    _ => return SideEffect::None,
                 },
                 Mode::Filter => match action {
                     Action::ConfirmFilter => {
@@ -330,7 +324,7 @@ impl App {
                         } else if let Some(tab) = self.active_tab_mut() {
                             tab.mode = Mode::Normal;
                         }
-                        return None;
+                        return SideEffect::None;
                     }
                     Action::CancelFilter => {
                         if self.is_in_log_view() {
@@ -345,7 +339,7 @@ impl App {
                             }
                             self.apply_filter();
                         }
-                        return None;
+                        return SideEffect::None;
                     }
                     Action::FilterHandleInput(req) => {
                         if self.is_in_log_view() {
@@ -358,9 +352,9 @@ impl App {
                             }
                             self.apply_filter();
                         }
-                        return None;
+                        return SideEffect::None;
                     }
-                    _ => return None,
+                    _ => return SideEffect::None,
                 },
                 Mode::Form(_) => match action {
                     Action::FormSubmit => return self.handle_form_submit(),
@@ -368,17 +362,17 @@ impl App {
                         if let Some(tab) = self.active_tab_mut() {
                             tab.mode = Mode::Normal;
                         }
-                        return None;
+                        return SideEffect::None;
                     }
                     Action::FormNextField => {
                         self.handle_form_next_field();
-                        return None;
+                        return SideEffect::None;
                     }
                     Action::FormHandleInput(req) => {
                         self.handle_form_input(req);
-                        return None;
+                        return SideEffect::None;
                     }
-                    _ => return None,
+                    _ => return SideEffect::None,
                 },
                 Mode::DangerConfirm(_) => match action {
                     Action::DangerConfirmSubmit => return self.handle_danger_confirm_submit(),
@@ -386,13 +380,13 @@ impl App {
                         if let Some(tab) = self.active_tab_mut() {
                             tab.mode = Mode::Normal;
                         }
-                        return None;
+                        return SideEffect::None;
                     }
                     Action::DangerConfirmHandleInput(req) => {
                         self.handle_danger_confirm_input(req);
-                        return None;
+                        return SideEffect::None;
                     }
-                    _ => return None,
+                    _ => return SideEffect::None,
                 },
                 Mode::ContainerSelect { names, selected } => match action {
                     Action::ContainerSelectConfirm => {
@@ -454,13 +448,13 @@ impl App {
                                 }
                             }
                         }
-                        return None;
+                        return SideEffect::None;
                     }
                     Action::ContainerSelectCancel => {
                         if let Some(tab) = self.active_tab_mut() {
                             tab.mode = Mode::Normal;
                         }
-                        return None;
+                        return SideEffect::None;
                     }
                     Action::ContainerSelectUp => {
                         if let Some(tab) = self.active_tab_mut()
@@ -468,7 +462,7 @@ impl App {
                         {
                             *selected = selected.saturating_sub(1);
                         }
-                        return None;
+                        return SideEffect::None;
                     }
                     Action::ContainerSelectDown => {
                         if let Some(tab) = self.active_tab_mut()
@@ -479,9 +473,9 @@ impl App {
                                 *selected += 1;
                             }
                         }
-                        return None;
+                        return SideEffect::None;
                     }
-                    _ => return None,
+                    _ => return SideEffect::None,
                 },
                 _ => {}
             }
@@ -492,20 +486,20 @@ impl App {
             match action {
                 Action::ConfirmFilter => {
                     self.dashboard.mode = Mode::Normal;
-                    return None;
+                    return SideEffect::None;
                 }
                 Action::CancelFilter => {
                     self.dashboard.mode = Mode::Normal;
                     self.dashboard.filter_input.reset();
                     self.apply_filter();
-                    return None;
+                    return SideEffect::None;
                 }
                 Action::FilterHandleInput(req) => {
                     self.dashboard.filter_input.handle(req);
                     self.apply_filter();
-                    return None;
+                    return SideEffect::None;
                 }
-                _ => return None,
+                _ => return SideEffect::None,
             }
         }
 
@@ -584,7 +578,7 @@ impl App {
             | Action::ContainerSelectConfirm
             | Action::ContainerSelectCancel => {}
         }
-        None
+        SideEffect::None
     }
 
     /// AppEventをApp状態に反映する。
@@ -1199,15 +1193,20 @@ impl App {
         }
     }
 
-    fn handle_confirm_yes(&mut self) -> Option<ConfirmAction> {
-        let tab = self.active_tab_mut()?;
+    fn handle_confirm_yes(&mut self) -> SideEffect {
+        let Some(tab) = self.active_tab_mut() else {
+            return SideEffect::None;
+        };
         let confirmed = if let Mode::Confirm(action) = &tab.mode {
             Some(action.clone())
         } else {
             None
         };
         tab.mode = Mode::Normal;
-        confirmed
+        match confirmed {
+            Some(action) => SideEffect::Confirm(action),
+            None => SideEffect::None,
+        }
     }
 
     fn switch_detail_tab(&mut self) {
@@ -1451,10 +1450,12 @@ impl App {
     }
 
     /// FormSubmitのハンドリング
-    fn handle_form_submit(&mut self) -> Option<ConfirmAction> {
-        let tab = self.active_tab()?;
+    fn handle_form_submit(&mut self) -> SideEffect {
+        let Some(tab) = self.active_tab() else {
+            return SideEffect::None;
+        };
         let Mode::Form(ctx) = &tab.mode else {
-            return None;
+            return SideEffect::None;
         };
 
         // 必須フィールドのバリデーション
@@ -1462,20 +1463,21 @@ impl App {
             if field.required && field.input.value().is_empty() {
                 let msg = format!("'{}' is required", field.label);
                 self.show_message(MessageLevel::Error, "Validation Error", msg);
-                return None;
+                return SideEffect::None;
             }
         }
 
         // FormContextを取り出してNormalに戻す
-        let tab = self.active_tab_mut()?;
-        let Mode::Form(ctx) = std::mem::replace(&mut tab.mode, Mode::Normal) else {
-            return None;
+        let Some(tab) = self.active_tab_mut() else {
+            return SideEffect::None;
         };
-        self.pending_form = Some(ctx);
+        let Mode::Form(ctx) = std::mem::replace(&mut tab.mode, Mode::Normal) else {
+            return SideEffect::None;
+        };
         if let Some(tab) = self.active_tab_mut() {
             tab.loading = true;
         }
-        None
+        SideEffect::FormSubmit(ctx)
     }
 
     /// フォームの次のフィールドにフォーカスを移動
@@ -1498,25 +1500,28 @@ impl App {
     }
 
     /// DangerConfirmSubmitのハンドリング
-    fn handle_danger_confirm_submit(&mut self) -> Option<ConfirmAction> {
-        let tab = self.active_tab()?;
+    fn handle_danger_confirm_submit(&mut self) -> SideEffect {
+        let Some(tab) = self.active_tab() else {
+            return SideEffect::None;
+        };
         let Mode::DangerConfirm(ctx) = &tab.mode else {
-            return None;
+            return SideEffect::None;
         };
 
         if ctx.input.value() != ctx.action.confirm_text() {
-            return None;
+            return SideEffect::None;
         }
 
-        let tab = self.active_tab_mut()?;
-        let Mode::DangerConfirm(ctx) = std::mem::replace(&mut tab.mode, Mode::Normal) else {
-            return None;
+        let Some(tab) = self.active_tab_mut() else {
+            return SideEffect::None;
         };
-        self.pending_danger_action = Some(ctx.action);
+        let Mode::DangerConfirm(ctx) = std::mem::replace(&mut tab.mode, Mode::Normal) else {
+            return SideEffect::None;
+        };
         if let Some(tab) = self.active_tab_mut() {
             tab.loading = true;
         }
-        None
+        SideEffect::DangerAction(ctx.action)
     }
 
     /// DangerConfirm入力のハンドリング
@@ -1645,7 +1650,7 @@ mod tests {
         let mut app = App::new("dev".to_string(), None);
         let result = app.dispatch(Action::Quit);
         assert!(app.should_quit);
-        assert!(result.is_none());
+        assert_eq!(result, SideEffect::None);
     }
 
     // ──────────────────────────────────────────────
@@ -2040,7 +2045,10 @@ mod tests {
         app.active_tab_mut().unwrap().mode =
             Mode::Confirm(ConfirmAction::Stop("i-001".to_string()));
         let result = app.dispatch(Action::ConfirmYes);
-        assert_eq!(result, Some(ConfirmAction::Stop("i-001".to_string())));
+        assert_eq!(
+            result,
+            SideEffect::Confirm(ConfirmAction::Stop("i-001".to_string()))
+        );
         assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
     }
 
@@ -2050,7 +2058,7 @@ mod tests {
         app.active_tab_mut().unwrap().mode =
             Mode::Confirm(ConfirmAction::Stop("i-001".to_string()));
         let result = app.dispatch(Action::ConfirmNo);
-        assert!(result.is_none());
+        assert_eq!(result, SideEffect::None);
         assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
     }
 
@@ -2182,7 +2190,7 @@ mod tests {
     }
 
     #[test]
-    fn form_submit_sets_pending_form_when_valid() {
+    fn form_submit_returns_form_submit_side_effect_when_valid() {
         let mut app = app_with_ec2_tab();
         let mut input = Input::default();
         input.handle(tui_input::InputRequest::InsertChar('t'));
@@ -2198,9 +2206,9 @@ mod tests {
             }],
             focused_field: 0,
         });
-        app.dispatch(Action::FormSubmit);
+        let result = app.dispatch(Action::FormSubmit);
         assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
-        assert!(app.pending_form.is_some());
+        assert!(matches!(result, SideEffect::FormSubmit(_)));
         assert!(app.active_tab().unwrap().loading);
     }
 
@@ -2223,7 +2231,7 @@ mod tests {
     }
 
     #[test]
-    fn danger_confirm_submit_sets_pending_action_when_text_matches() {
+    fn danger_confirm_submit_returns_danger_action_when_text_matches() {
         let mut app = app_with_ec2_tab();
         let mut input = Input::default();
         for c in "i-001".chars() {
@@ -2233,12 +2241,11 @@ mod tests {
             action: DangerAction::TerminateEc2("i-001".to_string()),
             input,
         });
-        app.dispatch(Action::DangerConfirmSubmit);
+        let result = app.dispatch(Action::DangerConfirmSubmit);
         assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
-        assert!(app.pending_danger_action.is_some());
         assert_eq!(
-            app.pending_danger_action.unwrap(),
-            DangerAction::TerminateEc2("i-001".to_string())
+            result,
+            SideEffect::DangerAction(DangerAction::TerminateEc2("i-001".to_string()))
         );
     }
 
@@ -2477,10 +2484,10 @@ mod tests {
     // ──────────────────────────────────────────────
 
     #[test]
-    fn dispatch_returns_none_when_noop() {
+    fn dispatch_returns_side_effect_none_when_noop() {
         let mut app = App::new("dev".to_string(), None);
         let result = app.dispatch(Action::Noop);
-        assert!(result.is_none());
+        assert_eq!(result, SideEffect::None);
     }
 
     // ──────────────────────────────────────────────

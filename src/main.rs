@@ -1,7 +1,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use awsui::app::{App, ConfirmAction, Mode};
+use awsui::app::{App, ConfirmAction, Mode, SideEffect};
 use awsui::aws::client::Ec2Client;
 use awsui::aws::ecr_client::EcrClient;
 use awsui::aws::ecs_client::EcsClient;
@@ -170,9 +170,9 @@ async fn main() -> anyhow::Result<()> {
                     let prev_tab_id = app.active_tab().map(|t| t.id);
                     let action = awsui::tui::input::handle_key(&app, key);
                     let action_clone = action.clone();
-                    let confirmed = app.dispatch(action);
+                    let side_effect = app.dispatch(action);
 
-                    handle_side_effects(&mut app, &mut clients, confirmed, &prev_view, prev_tab_id, &action_clone).await;
+                    handle_side_effects(&mut app, &mut clients, side_effect, &prev_view, prev_tab_id, &action_clone).await;
 
                     // ログポーリング管理
                     manage_log_polling(&app, &clients, &mut log_poll_handle);
@@ -580,7 +580,7 @@ fn load_instances(tx: &mpsc::Sender<AppEvent>, client: Arc<dyn Ec2Client>, tab_i
 async fn handle_side_effects(
     app: &mut App,
     clients: &mut Clients,
-    confirmed: Option<ConfirmAction>,
+    side_effect: SideEffect,
     prev_view: &Option<(ServiceKind, TabView)>,
     prev_tab_id: Option<TabId>,
     action_clone: &awsui::action::Action,
@@ -678,7 +678,7 @@ async fn handle_side_effects(
 
     // リフレッシュ（既にリストビューにいて loading が true の場合）
     if tab_loading
-        && confirmed.is_none()
+        && matches!(side_effect, SideEffect::None)
         && tab_view == awsui::tab::TabView::List
         && prev_view
             .as_ref()
@@ -688,62 +688,76 @@ async fn handle_side_effects(
         return;
     }
 
-    // ConfirmYes → API呼び出し (EC2のみ)
-    if let Some(action) = confirmed
-        && let Some(client) = clients.ec2.clone()
-    {
-        let tx = app.event_tx.clone();
-        match action {
-            ConfirmAction::Start(id) => {
-                tokio::spawn(async move {
-                    let result = client.start_instances(std::slice::from_ref(&id)).await;
-                    let event = match result {
-                        Ok(()) => AppEvent::TabEvent(
-                            tab_id,
-                            TabEvent::ActionCompleted(Ok(format!("Instance {} started", id))),
-                        ),
-                        Err(e) => AppEvent::TabEvent(tab_id, TabEvent::ActionCompleted(Err(e))),
-                    };
-                    let _ = tx.send(event).await;
-                });
-            }
-            ConfirmAction::Stop(id) => {
-                tokio::spawn(async move {
-                    let result = client.stop_instances(std::slice::from_ref(&id)).await;
-                    let event = match result {
-                        Ok(()) => AppEvent::TabEvent(
-                            tab_id,
-                            TabEvent::ActionCompleted(Ok(format!("Instance {} stopped", id))),
-                        ),
-                        Err(e) => AppEvent::TabEvent(tab_id, TabEvent::ActionCompleted(Err(e))),
-                    };
-                    let _ = tx.send(event).await;
-                });
-            }
-            ConfirmAction::Reboot(id) => {
-                tokio::spawn(async move {
-                    let result = client.reboot_instances(std::slice::from_ref(&id)).await;
-                    let event = match result {
-                        Ok(()) => AppEvent::TabEvent(
-                            tab_id,
-                            TabEvent::ActionCompleted(Ok(format!("Instance {} rebooted", id))),
-                        ),
-                        Err(e) => AppEvent::TabEvent(tab_id, TabEvent::ActionCompleted(Err(e))),
-                    };
-                    let _ = tx.send(event).await;
-                });
+    // 副作用の処理
+    match side_effect {
+        SideEffect::Confirm(action) => {
+            if let Some(client) = clients.ec2.clone() {
+                let tx = app.event_tx.clone();
+                match action {
+                    ConfirmAction::Start(id) => {
+                        tokio::spawn(async move {
+                            let result = client.start_instances(std::slice::from_ref(&id)).await;
+                            let event = match result {
+                                Ok(()) => AppEvent::TabEvent(
+                                    tab_id,
+                                    TabEvent::ActionCompleted(Ok(format!(
+                                        "Instance {} started",
+                                        id
+                                    ))),
+                                ),
+                                Err(e) => {
+                                    AppEvent::TabEvent(tab_id, TabEvent::ActionCompleted(Err(e)))
+                                }
+                            };
+                            let _ = tx.send(event).await;
+                        });
+                    }
+                    ConfirmAction::Stop(id) => {
+                        tokio::spawn(async move {
+                            let result = client.stop_instances(std::slice::from_ref(&id)).await;
+                            let event = match result {
+                                Ok(()) => AppEvent::TabEvent(
+                                    tab_id,
+                                    TabEvent::ActionCompleted(Ok(format!(
+                                        "Instance {} stopped",
+                                        id
+                                    ))),
+                                ),
+                                Err(e) => {
+                                    AppEvent::TabEvent(tab_id, TabEvent::ActionCompleted(Err(e)))
+                                }
+                            };
+                            let _ = tx.send(event).await;
+                        });
+                    }
+                    ConfirmAction::Reboot(id) => {
+                        tokio::spawn(async move {
+                            let result = client.reboot_instances(std::slice::from_ref(&id)).await;
+                            let event = match result {
+                                Ok(()) => AppEvent::TabEvent(
+                                    tab_id,
+                                    TabEvent::ActionCompleted(Ok(format!(
+                                        "Instance {} rebooted",
+                                        id
+                                    ))),
+                                ),
+                                Err(e) => {
+                                    AppEvent::TabEvent(tab_id, TabEvent::ActionCompleted(Err(e)))
+                                }
+                            };
+                            let _ = tx.send(event).await;
+                        });
+                    }
+                }
             }
         }
-    }
-
-    // フォーム送信 → CRUD API呼び出し
-    if let Some(form_ctx) = app.pending_form.take() {
-        handle_form_side_effect(app, clients, form_ctx, tab_id);
-    }
-
-    // 危険操作確認 → CRUD API呼び出し
-    if let Some(danger_action) = app.pending_danger_action.take() {
-        handle_danger_side_effect(app, clients, danger_action, tab_id);
+        SideEffect::FormSubmit(form_ctx) => {
+            handle_form_side_effect(app, clients, form_ctx, tab_id);
+        }
+        SideEffect::DangerAction(danger_action) => {
+            handle_danger_side_effect(app, clients, danger_action, tab_id);
+        }
+        SideEffect::None => {}
     }
 }
 

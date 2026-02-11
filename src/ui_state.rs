@@ -247,6 +247,15 @@ impl DashboardState {
     }
 }
 
+/// dispatch() が返す副作用
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SideEffect {
+    None,
+    Confirm(ConfirmAction),
+    FormSubmit(FormContext),
+    DangerAction(DangerAction),
+}
+
 /// サービスピッカーの状態
 pub struct ServicePickerState {
     pub selected_index: usize,
