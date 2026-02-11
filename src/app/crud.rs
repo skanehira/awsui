@@ -1,0 +1,311 @@
+use tui_input::Input;
+
+use super::App;
+use crate::service::ServiceKind;
+use crate::ui_state::*;
+
+impl App {
+    /// Create操作のハンドリング
+    pub(super) fn handle_create(&mut self) {
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        let form_ctx = match view {
+            (ServiceKind::S3, crate::tab::TabView::List) => Some(FormContext {
+                kind: FormKind::CreateS3Bucket,
+                fields: vec![FormField {
+                    label: "Bucket Name".to_string(),
+                    input: Input::default(),
+                    required: true,
+                }],
+                focused_field: 0,
+            }),
+            (ServiceKind::SecretsManager, crate::tab::TabView::List) => Some(FormContext {
+                kind: FormKind::CreateSecret,
+                fields: vec![
+                    FormField {
+                        label: "Name".to_string(),
+                        input: Input::default(),
+                        required: true,
+                    },
+                    FormField {
+                        label: "Value".to_string(),
+                        input: Input::default(),
+                        required: true,
+                    },
+                    FormField {
+                        label: "Description".to_string(),
+                        input: Input::default(),
+                        required: false,
+                    },
+                ],
+                focused_field: 0,
+            }),
+            _ => None,
+        };
+        if let Some(ctx) = form_ctx
+            && let Some(tab) = self.active_tab_mut()
+        {
+            tab.mode = Mode::Form(ctx);
+        }
+    }
+
+    /// Delete操作のハンドリング
+    pub(super) fn handle_delete(&mut self) {
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        match view {
+            (ServiceKind::Ec2, crate::tab::TabView::List) => {
+                if !self.can_delete("ec2") {
+                    self.show_message(
+                        MessageLevel::Error,
+                        "Permission Denied",
+                        "Delete not allowed. Use --allow-delete=ec2 or --allow-delete",
+                    );
+                    return;
+                }
+                let id = self.selected_instance().map(|i| i.instance_id.clone());
+                let Some(id) = id else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
+                        action: DangerAction::TerminateEc2(id),
+                        input: Input::default(),
+                    });
+                }
+            }
+            (ServiceKind::S3, crate::tab::TabView::List) => {
+                if !self.can_delete("s3") {
+                    self.show_message(
+                        MessageLevel::Error,
+                        "Permission Denied",
+                        "Delete not allowed. Use --allow-delete=s3 or --allow-delete",
+                    );
+                    return;
+                }
+                let bucket_name = self.active_tab().and_then(|tab| {
+                    if let crate::tab::ServiceData::S3 { buckets, .. } = &tab.data {
+                        buckets
+                            .filtered
+                            .get(tab.selected_index)
+                            .map(|b| b.name.clone())
+                    } else {
+                        None
+                    }
+                });
+                let Some(name) = bucket_name else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
+                        action: DangerAction::DeleteS3Bucket(name),
+                        input: Input::default(),
+                    });
+                }
+            }
+            (ServiceKind::S3, crate::tab::TabView::Detail) => {
+                if !self.can_delete("s3") {
+                    self.show_message(
+                        MessageLevel::Error,
+                        "Permission Denied",
+                        "Delete not allowed. Use --allow-delete=s3 or --allow-delete",
+                    );
+                    return;
+                }
+                let obj_info = self.active_tab().and_then(|tab| {
+                    if let crate::tab::ServiceData::S3 {
+                        objects,
+                        selected_bucket,
+                        ..
+                    } = &tab.data
+                    {
+                        objects.get(tab.detail_tag_index).and_then(|obj| {
+                            if !obj.is_prefix {
+                                Some((selected_bucket.clone().unwrap_or_default(), obj.key.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                });
+                let Some((bucket, key)) = obj_info else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
+                        action: DangerAction::DeleteS3Object { bucket, key },
+                        input: Input::default(),
+                    });
+                }
+            }
+            (ServiceKind::SecretsManager, crate::tab::TabView::List) => {
+                if !self.can_delete("secretsmanager") {
+                    self.show_message(
+                        MessageLevel::Error,
+                        "Permission Denied",
+                        "Delete not allowed. Use --allow-delete=secretsmanager or --allow-delete",
+                    );
+                    return;
+                }
+                let secret_name = self.active_tab().and_then(|tab| {
+                    if let crate::tab::ServiceData::Secrets { secrets, .. } = &tab.data {
+                        secrets
+                            .filtered
+                            .get(tab.selected_index)
+                            .map(|s| s.name.clone())
+                    } else {
+                        None
+                    }
+                });
+                let Some(name) = secret_name else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
+                        action: DangerAction::DeleteSecret(name),
+                        input: Input::default(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Edit操作のハンドリング
+    pub(super) fn handle_edit(&mut self) {
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        if view != (ServiceKind::SecretsManager, crate::tab::TabView::Detail) {
+            return;
+        }
+        let detail_name = self.active_tab().and_then(|tab| {
+            if let crate::tab::ServiceData::Secrets { detail, .. } = &tab.data {
+                detail.as_ref().map(|d| d.name.clone())
+            } else {
+                None
+            }
+        });
+        let Some(name) = detail_name else {
+            return;
+        };
+        if let Some(tab) = self.active_tab_mut() {
+            tab.mode = Mode::Form(FormContext {
+                kind: FormKind::UpdateSecretValue,
+                fields: vec![FormField {
+                    label: format!("New value for '{}'", name),
+                    input: Input::default(),
+                    required: true,
+                }],
+                focused_field: 0,
+            });
+        }
+    }
+
+    /// FormSubmitのハンドリング
+    pub(super) fn handle_form_submit(&mut self) -> SideEffect {
+        let Some(tab) = self.active_tab() else {
+            return SideEffect::None;
+        };
+        let Mode::Form(ctx) = &tab.mode else {
+            return SideEffect::None;
+        };
+
+        // 必須フィールドのバリデーション
+        for field in &ctx.fields {
+            if field.required && field.input.value().is_empty() {
+                let msg = format!("'{}' is required", field.label);
+                self.show_message(MessageLevel::Error, "Validation Error", msg);
+                return SideEffect::None;
+            }
+        }
+
+        // FormContextを取り出してNormalに戻す
+        let Some(tab) = self.active_tab_mut() else {
+            return SideEffect::None;
+        };
+        let Mode::Form(ctx) = std::mem::replace(&mut tab.mode, Mode::Normal) else {
+            return SideEffect::None;
+        };
+        if let Some(tab) = self.active_tab_mut() {
+            tab.loading = true;
+        }
+        SideEffect::FormSubmit(ctx)
+    }
+
+    /// フォームの次のフィールドにフォーカスを移動
+    pub(super) fn handle_form_next_field(&mut self) {
+        if let Some(tab) = self.active_tab_mut()
+            && let Mode::Form(ctx) = &mut tab.mode
+        {
+            ctx.focused_field = (ctx.focused_field + 1) % ctx.fields.len();
+        }
+    }
+
+    /// フォーム入力のハンドリング
+    pub(super) fn handle_form_input(&mut self, req: tui_input::InputRequest) {
+        if let Some(tab) = self.active_tab_mut()
+            && let Mode::Form(ctx) = &mut tab.mode
+            && let Some(field) = ctx.fields.get_mut(ctx.focused_field)
+        {
+            field.input.handle(req);
+        }
+    }
+
+    /// DangerConfirmSubmitのハンドリング
+    pub(super) fn handle_danger_confirm_submit(&mut self) -> SideEffect {
+        let Some(tab) = self.active_tab() else {
+            return SideEffect::None;
+        };
+        let Mode::DangerConfirm(ctx) = &tab.mode else {
+            return SideEffect::None;
+        };
+
+        if ctx.input.value() != ctx.action.confirm_text() {
+            return SideEffect::None;
+        }
+
+        let Some(tab) = self.active_tab_mut() else {
+            return SideEffect::None;
+        };
+        let Mode::DangerConfirm(ctx) = std::mem::replace(&mut tab.mode, Mode::Normal) else {
+            return SideEffect::None;
+        };
+        if let Some(tab) = self.active_tab_mut() {
+            tab.loading = true;
+        }
+        SideEffect::DangerAction(ctx.action)
+    }
+
+    /// DangerConfirm入力のハンドリング
+    pub(super) fn handle_danger_confirm_input(&mut self, req: tui_input::InputRequest) {
+        if let Some(tab) = self.active_tab_mut()
+            && let Mode::DangerConfirm(ctx) = &mut tab.mode
+        {
+            ctx.input.handle(req);
+        }
+    }
+
+    /// シークレット値の表示/非表示切り替え
+    pub(super) fn reveal_secret_value(&mut self) {
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        if let crate::tab::ServiceData::Secrets {
+            detail: Some(d),
+            value_visible,
+            ..
+        } = &mut tab.data
+        {
+            if d.secret_value.is_some() {
+                *value_visible = !*value_visible;
+            } else {
+                tab.loading = true;
+            }
+        }
+    }
+}
