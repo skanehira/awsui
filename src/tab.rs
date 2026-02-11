@@ -192,6 +192,57 @@ pub enum TabView {
     Detail,
 }
 
+/// ECS詳細画面のナビゲーションレベル
+#[derive(Debug, Clone)]
+pub enum EcsNavLevel {
+    ClusterDetail,
+    ServiceDetail {
+        service_index: usize,
+    },
+    TaskDetail {
+        service_index: usize,
+        task_index: usize,
+    },
+    LogView {
+        service_index: usize,
+        task_index: usize,
+        log_state: Box<LogViewState>,
+    },
+}
+
+impl EcsNavLevel {
+    pub fn service_index(&self) -> Option<usize> {
+        match self {
+            EcsNavLevel::ServiceDetail { service_index, .. }
+            | EcsNavLevel::TaskDetail { service_index, .. }
+            | EcsNavLevel::LogView { service_index, .. } => Some(*service_index),
+            _ => None,
+        }
+    }
+
+    pub fn task_index(&self) -> Option<usize> {
+        match self {
+            EcsNavLevel::TaskDetail { task_index, .. }
+            | EcsNavLevel::LogView { task_index, .. } => Some(*task_index),
+            _ => None,
+        }
+    }
+
+    pub fn log_state(&self) -> Option<&LogViewState> {
+        match self {
+            EcsNavLevel::LogView { log_state, .. } => Some(log_state),
+            _ => None,
+        }
+    }
+
+    pub fn log_state_mut(&mut self) -> Option<&mut LogViewState> {
+        match self {
+            EcsNavLevel::LogView { log_state, .. } => Some(log_state),
+            _ => None,
+        }
+    }
+}
+
 /// サービス固有のデータ
 #[derive(Debug, Clone)]
 pub enum ServiceData {
@@ -205,10 +256,8 @@ pub enum ServiceData {
     Ecs {
         clusters: FilterableList<Cluster>,
         services: Vec<Service>,
-        selected_service_index: Option<usize>,
         tasks: Vec<Task>,
-        selected_task_index: Option<usize>,
-        log_state: Option<Box<LogViewState>>,
+        nav_level: Option<EcsNavLevel>,
     },
     S3 {
         buckets: FilterableList<Bucket>,
@@ -241,10 +290,8 @@ impl ServiceData {
             ServiceKind::Ecs => ServiceData::Ecs {
                 clusters: FilterableList::new(),
                 services: Vec::new(),
-                selected_service_index: None,
                 tasks: Vec::new(),
-                selected_task_index: None,
-                log_state: None,
+                nav_level: None,
             },
             ServiceKind::S3 => ServiceData::S3 {
                 buckets: FilterableList::new(),
@@ -325,14 +372,8 @@ impl Tab {
             *detail_tab = SecretsDetailTab::Overview;
             *value_visible = false;
         }
-        if let ServiceData::Ecs {
-            selected_service_index,
-            selected_task_index,
-            ..
-        } = &mut self.data
-        {
-            *selected_service_index = None;
-            *selected_task_index = None;
+        if let ServiceData::Ecs { nav_level, .. } = &mut self.data {
+            *nav_level = Some(EcsNavLevel::ClusterDetail);
         }
     }
 
@@ -365,19 +406,14 @@ impl Tab {
             ServiceData::Ecr { images, .. } => images.len(),
             ServiceData::Ecs {
                 services,
-                selected_service_index,
                 tasks,
-                selected_task_index,
+                nav_level,
                 ..
-            } => {
-                if selected_task_index.is_some() {
-                    0 // タスク詳細はスクロール不要
-                } else if selected_service_index.is_some() {
-                    tasks.len() // サービス詳細 → タスク一覧
-                } else {
-                    services.len() // クラスター詳細 → サービス一覧
-                }
-            }
+            } => match nav_level {
+                Some(EcsNavLevel::TaskDetail { .. }) | Some(EcsNavLevel::LogView { .. }) => 0, // タスク詳細・ログはスクロール不要
+                Some(EcsNavLevel::ServiceDetail { .. }) => tasks.len(), // サービス詳細 → タスク一覧
+                _ => services.len(), // クラスター詳細 → サービス一覧
+            },
             ServiceData::S3 { objects, .. } => objects.len(),
             ServiceData::Vpc { subnets, .. } => subnets.len(),
             ServiceData::Secrets {
@@ -448,7 +484,7 @@ impl Tab {
         matches!(
             &self.data,
             ServiceData::Ecs {
-                log_state: Some(_),
+                nav_level: Some(EcsNavLevel::LogView { .. }),
                 ..
             }
         )
@@ -456,8 +492,12 @@ impl Tab {
 
     /// ログビューの状態への可変参照を取得
     pub fn log_state_mut(&mut self) -> Option<&mut LogViewState> {
-        if let ServiceData::Ecs { log_state, .. } = &mut self.data {
-            log_state.as_deref_mut()
+        if let ServiceData::Ecs {
+            nav_level: Some(nav),
+            ..
+        } = &mut self.data
+        {
+            nav.log_state_mut()
         } else {
             None
         }
@@ -571,25 +611,33 @@ impl Tab {
                 if self.service == ServiceKind::Ecs
                     && let ServiceData::Ecs {
                         services,
-                        selected_service_index,
                         tasks,
-                        selected_task_index,
+                        nav_level,
                         ..
                     } = &mut self.data
                 {
-                    if selected_service_index.is_some() {
-                        // サービス詳細 → タスク詳細
-                        if selected_task_index.is_none()
-                            && !tasks.is_empty()
-                            && self.detail_tag_index < tasks.len()
-                        {
-                            *selected_task_index = Some(self.detail_tag_index);
+                    match nav_level {
+                        Some(EcsNavLevel::ServiceDetail { service_index }) => {
+                            // サービス詳細 → タスク詳細
+                            let svc_idx = *service_index;
+                            if !tasks.is_empty() && self.detail_tag_index < tasks.len() {
+                                *nav_level = Some(EcsNavLevel::TaskDetail {
+                                    service_index: svc_idx,
+                                    task_index: self.detail_tag_index,
+                                });
+                            }
                         }
-                    } else if !services.is_empty() && self.detail_tag_index < services.len() {
-                        // サービス一覧 → サービス詳細（タスク読み込みトリガー）
-                        *selected_service_index = Some(self.detail_tag_index);
-                        self.detail_tag_index = 0;
-                        self.loading = true;
+                        Some(EcsNavLevel::ClusterDetail) => {
+                            // サービス一覧 → サービス詳細（タスク読み込みトリガー）
+                            if !services.is_empty() && self.detail_tag_index < services.len() {
+                                *nav_level = Some(EcsNavLevel::ServiceDetail {
+                                    service_index: self.detail_tag_index,
+                                });
+                                self.detail_tag_index = 0;
+                                self.loading = true;
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
@@ -670,28 +718,42 @@ impl Tab {
                 if self.service == ServiceKind::Ecs
                     && let ServiceData::Ecs {
                         services,
-                        selected_service_index,
                         tasks,
-                        selected_task_index,
-                        log_state,
+                        nav_level,
                         ..
                     } = &mut self.data
                 {
-                    if log_state.is_some() {
-                        *log_state = None;
-                        return;
+                    match nav_level {
+                        Some(EcsNavLevel::LogView {
+                            service_index,
+                            task_index,
+                            ..
+                        }) => {
+                            let si = *service_index;
+                            let ti = *task_index;
+                            *nav_level = Some(EcsNavLevel::TaskDetail {
+                                service_index: si,
+                                task_index: ti,
+                            });
+                            return;
+                        }
+                        Some(EcsNavLevel::TaskDetail { service_index, .. }) => {
+                            let si = *service_index;
+                            *nav_level = Some(EcsNavLevel::ServiceDetail { service_index: si });
+                            return;
+                        }
+                        Some(EcsNavLevel::ServiceDetail { .. }) => {
+                            *nav_level = Some(EcsNavLevel::ClusterDetail);
+                            tasks.clear();
+                            self.detail_tag_index = 0;
+                            return;
+                        }
+                        Some(EcsNavLevel::ClusterDetail) => {
+                            *nav_level = None;
+                            services.clear();
+                        }
+                        None => {}
                     }
-                    if selected_task_index.is_some() {
-                        *selected_task_index = None;
-                        return;
-                    }
-                    if selected_service_index.is_some() {
-                        *selected_service_index = None;
-                        tasks.clear();
-                        self.detail_tag_index = 0;
-                        return;
-                    }
-                    services.clear();
                 }
 
                 // Secrets: 詳細をクリア

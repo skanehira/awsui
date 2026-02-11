@@ -86,8 +86,10 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
         }
         (ServiceKind::Ecs, TabView::Detail) => {
             // ログビュー表示中は専用ハンドラー
-            if let crate::tab::ServiceData::Ecs { log_state, .. } = &tab.data
-                && log_state.is_some()
+            if let crate::tab::ServiceData::Ecs {
+                nav_level: Some(crate::tab::EcsNavLevel::LogView { .. }),
+                ..
+            } = &tab.data
             {
                 return match mode {
                     Mode::Filter => handle_filter_key(key),
@@ -1114,27 +1116,31 @@ mod tests {
 
     fn app_with_ecs_log_view() -> App {
         use crate::aws::logs_model::LogEvent;
-        use crate::tab::LogViewState;
+        use crate::tab::{EcsNavLevel, LogViewState};
 
         let mut app = app_with_view(Some((ServiceKind::Ecs, TabView::Detail)));
         if let Some(tab) = app.active_tab_mut() {
-            if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data {
-                *log_state = Some(Box::new(LogViewState {
-                    container_name: "app".to_string(),
-                    log_group: "/ecs/svc".to_string(),
-                    log_stream: "ecs/app/abc".to_string(),
-                    events: vec![LogEvent {
-                        timestamp: 0,
-                        formatted_time: "".to_string(),
-                        message: "test".to_string(),
-                    }],
-                    next_forward_token: None,
-                    auto_scroll: true,
-                    scroll_offset: 0,
-                    search_query: String::new(),
-                    search_matches: Vec::new(),
-                    current_match_index: None,
-                }));
+            if let crate::tab::ServiceData::Ecs { nav_level, .. } = &mut tab.data {
+                *nav_level = Some(EcsNavLevel::LogView {
+                    service_index: 0,
+                    task_index: 0,
+                    log_state: Box::new(LogViewState {
+                        container_name: "app".to_string(),
+                        log_group: "/ecs/svc".to_string(),
+                        log_stream: "ecs/app/abc".to_string(),
+                        events: vec![LogEvent {
+                            timestamp: 0,
+                            formatted_time: "".to_string(),
+                            message: "test".to_string(),
+                        }],
+                        next_forward_token: None,
+                        auto_scroll: true,
+                        scroll_offset: 0,
+                        search_query: String::new(),
+                        search_matches: Vec::new(),
+                        current_match_index: None,
+                    }),
+                });
             }
         }
         app

@@ -151,11 +151,11 @@ async fn main() -> anyhow::Result<()> {
                 // ログ初回取得（EcsLogConfigsLoaded後にlog_stateが設定されloading=trueの場合）
                 if let Some(tab) = app.active_tab()
                     && tab.loading
-                    && let awsui::tab::ServiceData::Ecs { log_state: Some(state), .. } = &tab.data
+                    && let awsui::tab::ServiceData::Ecs { nav_level: Some(awsui::tab::EcsNavLevel::LogView { log_state, .. }), .. } = &tab.data
                 {
-                    let log_group = state.log_group.clone();
-                    let log_stream = state.log_stream.clone();
-                    let next_token = state.next_forward_token.clone();
+                    let log_group = log_state.log_group.clone();
+                    let log_stream = log_state.log_stream.clone();
+                    let next_token = log_state.next_forward_token.clone();
                     let tid = tab.id;
                     fetch_log_events(&mut app, &mut clients, tid, &log_group, &log_stream, next_token).await;
                 }
@@ -328,54 +328,54 @@ fn render_tab_content(
             if let awsui::tab::ServiceData::Ecs {
                 clusters,
                 services,
-                selected_service_index,
                 tasks,
-                selected_task_index,
-                log_state,
+                nav_level,
                 ..
             } = &tab.data
                 && let Some(cluster) = clusters.filtered.get(tab.selected_index)
             {
-                // ログビュー表示中
-                if let Some(log_state) = log_state {
-                    awsui::tui::views::ecs_log::render(
-                        frame,
-                        log_state,
-                        tab.loading,
-                        spinner_tick,
-                        &tab.mode,
-                        tab.filter_input.value(),
-                        area,
-                    );
-                } else if let Some(task_idx) = selected_task_index
-                    && let Some(task) = tasks.get(*task_idx)
-                {
-                    // タスク詳細
-                    awsui::tui::views::ecs_task_detail::render(frame, task, area);
-                } else if let Some(svc_idx) = selected_service_index
-                    && let Some(service) = services.get(*svc_idx)
-                {
-                    // サービス詳細（タスク一覧付き）
-                    awsui::tui::views::ecs_service_detail::render(
-                        frame,
-                        service,
-                        tasks,
-                        tab.detail_tag_index,
-                        tab.loading,
-                        spinner_tick,
-                        area,
-                    );
-                } else {
-                    // クラスター詳細（サービス一覧）
-                    awsui::tui::views::ecs_detail::render(
-                        frame,
-                        cluster,
-                        services,
-                        tab.detail_tag_index,
-                        tab.loading,
-                        spinner_tick,
-                        area,
-                    );
+                match nav_level {
+                    Some(awsui::tab::EcsNavLevel::LogView { log_state, .. }) => {
+                        awsui::tui::views::ecs_log::render(
+                            frame,
+                            log_state,
+                            tab.loading,
+                            spinner_tick,
+                            &tab.mode,
+                            tab.filter_input.value(),
+                            area,
+                        );
+                    }
+                    Some(awsui::tab::EcsNavLevel::TaskDetail { task_index, .. }) => {
+                        if let Some(task) = tasks.get(*task_index) {
+                            awsui::tui::views::ecs_task_detail::render(frame, task, area);
+                        }
+                    }
+                    Some(awsui::tab::EcsNavLevel::ServiceDetail { service_index }) => {
+                        if let Some(service) = services.get(*service_index) {
+                            awsui::tui::views::ecs_service_detail::render(
+                                frame,
+                                service,
+                                tasks,
+                                tab.detail_tag_index,
+                                tab.loading,
+                                spinner_tick,
+                                area,
+                            );
+                        }
+                    }
+                    _ => {
+                        // ClusterDetail or None
+                        awsui::tui::views::ecs_detail::render(
+                            frame,
+                            cluster,
+                            services,
+                            tab.detail_tag_index,
+                            tab.loading,
+                            spinner_tick,
+                            area,
+                        );
+                    }
                 }
             }
         }
@@ -596,13 +596,13 @@ async fn handle_side_effects(
     if tab_loading
         && let Some(tab) = app.find_tab(tab_id)
         && let awsui::tab::ServiceData::Ecs {
-            log_state: Some(state),
+            nav_level: Some(awsui::tab::EcsNavLevel::LogView { log_state, .. }),
             ..
         } = &tab.data
     {
-        let log_group = state.log_group.clone();
-        let log_stream = state.log_stream.clone();
-        let next_token = state.next_forward_token.clone();
+        let log_group = log_state.log_group.clone();
+        let log_stream = log_state.log_stream.clone();
+        let next_token = log_state.next_forward_token.clone();
         fetch_log_events(app, clients, tab_id, &log_group, &log_stream, next_token).await;
         return;
     }
@@ -1090,11 +1090,11 @@ fn load_ecs_tasks(app: &App, clients: &Clients, tab_id: TabId) {
     if let awsui::tab::ServiceData::Ecs {
         clusters,
         services,
-        selected_service_index,
+        nav_level,
         ..
     } = &tab.data
-        && let Some(svc_idx) = selected_service_index
-        && let Some(service) = services.get(*svc_idx)
+        && let Some(svc_idx) = nav_level.as_ref().and_then(|nl| nl.service_index())
+        && let Some(service) = services.get(svc_idx)
         && let Some(cluster) = clusters.filtered.get(tab.selected_index)
         && let Some(client) = &clients.ecs
     {
@@ -1571,12 +1571,10 @@ fn load_ecs_log_configs(app: &App, clients: &Clients, tab_id: TabId) {
         return;
     };
     if let awsui::tab::ServiceData::Ecs {
-        tasks,
-        selected_task_index,
-        ..
+        tasks, nav_level, ..
     } = &tab.data
-        && let Some(task_idx) = selected_task_index
-        && let Some(task) = tasks.get(*task_idx)
+        && let Some(task_idx) = nav_level.as_ref().and_then(|nl| nl.task_index())
+        && let Some(task) = tasks.get(task_idx)
         && let Some(client) = &clients.ecs
     {
         let tx = app.event_tx.clone();
@@ -1657,8 +1655,12 @@ fn manage_log_polling(
     log_poll_handle: &mut Option<tokio::task::JoinHandle<()>>,
 ) {
     let should_poll = app.active_tab().is_some_and(|tab| {
-        if let awsui::tab::ServiceData::Ecs { log_state, .. } = &tab.data {
-            log_state.is_some() && !tab.loading
+        if let awsui::tab::ServiceData::Ecs {
+            nav_level: Some(awsui::tab::EcsNavLevel::LogView { .. }),
+            ..
+        } = &tab.data
+        {
+            !tab.loading
         } else {
             false
         }
@@ -1677,14 +1679,14 @@ fn manage_log_polling(
         let tab_id = tab.id;
         let Some((log_group, log_stream, next_token)) = (|| {
             if let awsui::tab::ServiceData::Ecs {
-                log_state: Some(state),
+                nav_level: Some(awsui::tab::EcsNavLevel::LogView { log_state, .. }),
                 ..
             } = &tab.data
             {
                 return Some((
-                    state.log_group.clone(),
-                    state.log_stream.clone(),
-                    state.next_forward_token.clone(),
+                    log_state.log_group.clone(),
+                    log_state.log_stream.clone(),
+                    log_state.next_forward_token.clone(),
                 ));
             }
             None

@@ -406,20 +406,20 @@ impl App {
                                 let tab_id = self.active_tab().map(|t| t.id);
                                 let task_id = self.active_tab().and_then(|tab| {
                                     if let crate::tab::ServiceData::Ecs {
-                                        tasks,
-                                        selected_task_index,
-                                        ..
+                                        tasks, nav_level, ..
                                     } = &tab.data
                                     {
-                                        selected_task_index.and_then(|idx| tasks.get(idx)).map(
-                                            |t| {
+                                        nav_level
+                                            .as_ref()
+                                            .and_then(|nl| nl.task_index())
+                                            .and_then(|idx| tasks.get(idx))
+                                            .map(|t| {
                                                 t.task_arn
                                                     .rsplit('/')
                                                     .next()
                                                     .unwrap_or(&t.task_arn)
                                                     .to_string()
-                                            },
-                                        )
+                                            })
                                     } else {
                                         None
                                     }
@@ -430,21 +430,29 @@ impl App {
                                     let log_stream =
                                         format!("{}/{}/{}", stream_prefix, container_name, task_id);
                                     if let Some(tab) = self.active_tab_mut()
-                                        && let crate::tab::ServiceData::Ecs { log_state, .. } =
+                                        && let crate::tab::ServiceData::Ecs { nav_level, .. } =
                                             &mut tab.data
                                     {
-                                        *log_state = Some(Box::new(crate::tab::LogViewState {
-                                            container_name,
-                                            log_group,
-                                            log_stream,
-                                            events: Vec::new(),
-                                            next_forward_token: None,
-                                            auto_scroll: true,
-                                            scroll_offset: 0,
-                                            search_query: String::new(),
-                                            search_matches: Vec::new(),
-                                            current_match_index: None,
-                                        }));
+                                        if let Some(nl) = nav_level.as_mut() {
+                                            let service_index = nl.service_index().unwrap_or(0);
+                                            let task_index = nl.task_index().unwrap_or(0);
+                                            *nav_level = Some(crate::tab::EcsNavLevel::LogView {
+                                                service_index,
+                                                task_index,
+                                                log_state: Box::new(crate::tab::LogViewState {
+                                                    container_name,
+                                                    log_group,
+                                                    log_stream,
+                                                    events: Vec::new(),
+                                                    next_forward_token: None,
+                                                    auto_scroll: true,
+                                                    scroll_offset: 0,
+                                                    search_query: String::new(),
+                                                    search_matches: Vec::new(),
+                                                    current_match_index: None,
+                                                }),
+                                            });
+                                        }
                                         tab.loading = true;
                                     }
                                 }
@@ -887,18 +895,20 @@ impl App {
                         // ログストリーム名を構築
                         let task_id = self.find_tab(tab_id).and_then(|tab| {
                             if let ServiceData::Ecs {
-                                tasks,
-                                selected_task_index,
-                                ..
+                                tasks, nav_level, ..
                             } = &tab.data
                             {
-                                selected_task_index.and_then(|idx| tasks.get(idx)).map(|t| {
-                                    t.task_arn
-                                        .rsplit('/')
-                                        .next()
-                                        .unwrap_or(&t.task_arn)
-                                        .to_string()
-                                })
+                                nav_level
+                                    .as_ref()
+                                    .and_then(|nl| nl.task_index())
+                                    .and_then(|idx| tasks.get(idx))
+                                    .map(|t| {
+                                        t.task_arn
+                                            .rsplit('/')
+                                            .next()
+                                            .unwrap_or(&t.task_arn)
+                                            .to_string()
+                                    })
                             } else {
                                 None
                             }
@@ -908,19 +918,27 @@ impl App {
                         let log_stream =
                             format!("{}/{}/{}", stream_prefix, config.container_name, task_id);
                         if let Some(tab) = self.find_tab_mut(tab_id) {
-                            if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data {
-                                *log_state = Some(Box::new(crate::tab::LogViewState {
-                                    container_name: config.container_name.clone(),
-                                    log_group,
-                                    log_stream,
-                                    events: Vec::new(),
-                                    next_forward_token: None,
-                                    auto_scroll: true,
-                                    scroll_offset: 0,
-                                    search_query: String::new(),
-                                    search_matches: Vec::new(),
-                                    current_match_index: None,
-                                }));
+                            if let crate::tab::ServiceData::Ecs { nav_level, .. } = &mut tab.data
+                                && let Some(nl) = nav_level
+                            {
+                                let service_index = nl.service_index().unwrap_or(0);
+                                let task_index = nl.task_index().unwrap_or(0);
+                                *nav_level = Some(crate::tab::EcsNavLevel::LogView {
+                                    service_index,
+                                    task_index,
+                                    log_state: Box::new(crate::tab::LogViewState {
+                                        container_name: config.container_name.clone(),
+                                        log_group,
+                                        log_stream,
+                                        events: Vec::new(),
+                                        next_forward_token: None,
+                                        auto_scroll: true,
+                                        scroll_offset: 0,
+                                        search_query: String::new(),
+                                        search_matches: Vec::new(),
+                                        current_match_index: None,
+                                    }),
+                                });
                             }
                             tab.loading = true;
                         }
@@ -947,8 +965,11 @@ impl App {
             TabEvent::EcsLogEventsLoaded(result) => match result {
                 Ok((events, next_token)) => {
                     if let Some(tab) = self.find_tab_mut(tab_id) {
-                        if let crate::tab::ServiceData::Ecs { log_state, .. } = &mut tab.data
-                            && let Some(state) = log_state
+                        if let crate::tab::ServiceData::Ecs {
+                            nav_level: Some(nav),
+                            ..
+                        } = &mut tab.data
+                            && let Some(state) = nav.log_state_mut()
                         {
                             state.events.extend(events);
                             state.next_forward_token = next_token;
