@@ -275,14 +275,10 @@ fn render_tab_content(
             awsui::tui::views::ec2_detail::render(frame, app, area)
         }
         Some((ServiceKind::Ecr, TabView::List)) => {
-            if let awsui::tab::ServiceData::Ecr {
-                filtered_repositories,
-                ..
-            } = &tab.data
-            {
+            if let awsui::tab::ServiceData::Ecr { repositories, .. } = &tab.data {
                 awsui::tui::views::ecr_list::render(
                     frame,
-                    filtered_repositories,
+                    &repositories.filtered,
                     tab.selected_index,
                     &tab.filter_input,
                     &tab.mode,
@@ -296,11 +292,11 @@ fn render_tab_content(
         }
         Some((ServiceKind::Ecr, TabView::Detail)) => {
             if let awsui::tab::ServiceData::Ecr {
-                filtered_repositories,
+                repositories,
                 images,
                 ..
             } = &tab.data
-                && let Some(repo) = filtered_repositories.get(tab.selected_index)
+                && let Some(repo) = repositories.filtered.get(tab.selected_index)
             {
                 awsui::tui::views::ecr_detail::render(
                     frame,
@@ -316,12 +312,9 @@ fn render_tab_content(
             }
         }
         Some((ServiceKind::Ecs, TabView::List)) => {
-            if let awsui::tab::ServiceData::Ecs {
-                filtered_clusters, ..
-            } = &tab.data
-            {
+            if let awsui::tab::ServiceData::Ecs { clusters, .. } = &tab.data {
                 let props = awsui::tui::views::ecs_list::EcsListProps {
-                    clusters: filtered_clusters,
+                    clusters: &clusters.filtered,
                     selected_index: tab.selected_index,
                     filter_input: &tab.filter_input,
                     mode: &tab.mode,
@@ -333,7 +326,7 @@ fn render_tab_content(
         }
         Some((ServiceKind::Ecs, TabView::Detail)) => {
             if let awsui::tab::ServiceData::Ecs {
-                filtered_clusters,
+                clusters,
                 services,
                 selected_service_index,
                 tasks,
@@ -341,7 +334,7 @@ fn render_tab_content(
                 log_state,
                 ..
             } = &tab.data
-                && let Some(cluster) = filtered_clusters.get(tab.selected_index)
+                && let Some(cluster) = clusters.filtered.get(tab.selected_index)
             {
                 // ログビュー表示中
                 if let Some(log_state) = log_state {
@@ -387,13 +380,10 @@ fn render_tab_content(
             }
         }
         Some((ServiceKind::S3, TabView::List)) => {
-            if let awsui::tab::ServiceData::S3 {
-                filtered_buckets, ..
-            } = &tab.data
-            {
+            if let awsui::tab::ServiceData::S3 { buckets, .. } = &tab.data {
                 awsui::tui::views::s3_list::render(
                     frame,
-                    filtered_buckets,
+                    &buckets.filtered,
                     tab.selected_index,
                     &tab.filter_input,
                     &tab.mode,
@@ -427,10 +417,10 @@ fn render_tab_content(
             }
         }
         Some((ServiceKind::Vpc, TabView::List)) => {
-            if let awsui::tab::ServiceData::Vpc { filtered_vpcs, .. } = &tab.data {
+            if let awsui::tab::ServiceData::Vpc { vpcs, .. } = &tab.data {
                 awsui::tui::views::vpc_list::render(
                     frame,
-                    filtered_vpcs,
+                    &vpcs.filtered,
                     tab.selected_index,
                     &tab.filter_input,
                     &tab.mode,
@@ -443,12 +433,8 @@ fn render_tab_content(
             }
         }
         Some((ServiceKind::Vpc, TabView::Detail)) => {
-            if let awsui::tab::ServiceData::Vpc {
-                filtered_vpcs,
-                subnets,
-                ..
-            } = &tab.data
-                && let Some(vpc) = filtered_vpcs.get(tab.selected_index)
+            if let awsui::tab::ServiceData::Vpc { vpcs, subnets, .. } = &tab.data
+                && let Some(vpc) = vpcs.filtered.get(tab.selected_index)
             {
                 awsui::tui::views::vpc_detail::render(
                     frame,
@@ -462,13 +448,10 @@ fn render_tab_content(
             }
         }
         Some((ServiceKind::SecretsManager, TabView::List)) => {
-            if let awsui::tab::ServiceData::Secrets {
-                filtered_secrets, ..
-            } = &tab.data
-            {
+            if let awsui::tab::ServiceData::Secrets { secrets, .. } = &tab.data {
                 awsui::tui::views::secrets_list::render(
                     frame,
-                    filtered_secrets,
+                    &secrets.filtered,
                     tab.selected_index,
                     &tab.filter_input,
                     &tab.mode,
@@ -985,11 +968,8 @@ fn load_detail_data(app: &App, clients: &Clients, tab_id: TabId) {
     };
 
     match &tab.data {
-        awsui::tab::ServiceData::Ecr {
-            filtered_repositories,
-            ..
-        } => {
-            if let Some(repo) = filtered_repositories.get(tab.selected_index)
+        awsui::tab::ServiceData::Ecr { repositories, .. } => {
+            if let Some(repo) = repositories.filtered.get(tab.selected_index)
                 && let Some(client) = &clients.ecr
             {
                 let tx = app.event_tx.clone();
@@ -1003,10 +983,8 @@ fn load_detail_data(app: &App, clients: &Clients, tab_id: TabId) {
                 });
             }
         }
-        awsui::tab::ServiceData::Ecs {
-            filtered_clusters, ..
-        } => {
-            if let Some(cluster) = filtered_clusters.get(tab.selected_index)
+        awsui::tab::ServiceData::Ecs { clusters, .. } => {
+            if let Some(cluster) = clusters.filtered.get(tab.selected_index)
                 && let Some(client) = &clients.ecs
             {
                 let tx = app.event_tx.clone();
@@ -1045,8 +1023,8 @@ fn load_detail_data(app: &App, clients: &Clients, tab_id: TabId) {
                 });
             }
         }
-        awsui::tab::ServiceData::Vpc { filtered_vpcs, .. } => {
-            if let Some(vpc) = filtered_vpcs.get(tab.selected_index)
+        awsui::tab::ServiceData::Vpc { vpcs, .. } => {
+            if let Some(vpc) = vpcs.filtered.get(tab.selected_index)
                 && let Some(client) = &clients.vpc
             {
                 let tx = app.event_tx.clone();
@@ -1060,10 +1038,8 @@ fn load_detail_data(app: &App, clients: &Clients, tab_id: TabId) {
                 });
             }
         }
-        awsui::tab::ServiceData::Secrets {
-            filtered_secrets, ..
-        } => {
-            if let Some(secret) = filtered_secrets.get(tab.selected_index)
+        awsui::tab::ServiceData::Secrets { secrets, .. } => {
+            if let Some(secret) = secrets.filtered.get(tab.selected_index)
                 && let Some(client) = &clients.secrets
             {
                 let tx = app.event_tx.clone();
@@ -1112,14 +1088,14 @@ fn load_ecs_tasks(app: &App, clients: &Clients, tab_id: TabId) {
         return;
     };
     if let awsui::tab::ServiceData::Ecs {
-        filtered_clusters,
+        clusters,
         services,
         selected_service_index,
         ..
     } = &tab.data
         && let Some(svc_idx) = selected_service_index
         && let Some(service) = services.get(*svc_idx)
-        && let Some(cluster) = filtered_clusters.get(tab.selected_index)
+        && let Some(cluster) = clusters.filtered.get(tab.selected_index)
         && let Some(client) = &clients.ecs
     {
         let tx = app.event_tx.clone();

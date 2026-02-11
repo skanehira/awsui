@@ -12,6 +12,63 @@ use crate::fuzzy::fuzzy_filter_items;
 use crate::service::ServiceKind;
 use crate::tui::views::secrets_detail::SecretsDetailTab;
 
+/// アイテムリストとフィルタ済みリストを統一管理する
+#[derive(Debug, Clone)]
+pub struct FilterableList<T: Clone> {
+    items: Vec<T>,
+    pub filtered: Vec<T>,
+}
+
+impl<T: Clone> FilterableList<T> {
+    pub fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            filtered: Vec::new(),
+        }
+    }
+
+    /// 全アイテムを設定し、フィルタ済みリストも同じにリセット
+    pub fn set_items(&mut self, items: Vec<T>) {
+        self.filtered = items.clone();
+        self.items = items;
+    }
+
+    /// 全アイテムへの参照
+    pub fn all(&self) -> &[T] {
+        &self.items
+    }
+
+    /// フィルタを適用（フィルタ関数で全アイテムから絞り込み）
+    pub fn apply_filter(&mut self, filter_fn: impl Fn(&T) -> bool) {
+        self.filtered = self
+            .items
+            .iter()
+            .filter(|item| filter_fn(item))
+            .cloned()
+            .collect();
+    }
+
+    /// フィルタをリセット（全アイテムを表示）
+    pub fn reset_filter(&mut self) {
+        self.filtered = self.items.clone();
+    }
+
+    /// フィルタ済みリストの長さ
+    pub fn len(&self) -> usize {
+        self.filtered.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.filtered.is_empty()
+    }
+}
+
+impl<T: Clone> Default for FilterableList<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// ログビューの状態
 #[derive(Debug, Clone)]
 pub struct LogViewState {
@@ -139,17 +196,14 @@ pub enum TabView {
 #[derive(Debug, Clone)]
 pub enum ServiceData {
     Ec2 {
-        instances: Vec<Instance>,
-        filtered_instances: Vec<Instance>,
+        instances: FilterableList<Instance>,
     },
     Ecr {
-        repositories: Vec<Repository>,
-        filtered_repositories: Vec<Repository>,
+        repositories: FilterableList<Repository>,
         images: Vec<Image>,
     },
     Ecs {
-        clusters: Vec<Cluster>,
-        filtered_clusters: Vec<Cluster>,
+        clusters: FilterableList<Cluster>,
         services: Vec<Service>,
         selected_service_index: Option<usize>,
         tasks: Vec<Task>,
@@ -157,20 +211,17 @@ pub enum ServiceData {
         log_state: Option<Box<LogViewState>>,
     },
     S3 {
-        buckets: Vec<Bucket>,
-        filtered_buckets: Vec<Bucket>,
+        buckets: FilterableList<Bucket>,
         objects: Vec<S3Object>,
         selected_bucket: Option<String>,
         current_prefix: String,
     },
     Vpc {
-        vpcs: Vec<Vpc>,
-        filtered_vpcs: Vec<Vpc>,
+        vpcs: FilterableList<Vpc>,
         subnets: Vec<Subnet>,
     },
     Secrets {
-        secrets: Vec<Secret>,
-        filtered_secrets: Vec<Secret>,
+        secrets: FilterableList<Secret>,
         detail: Option<Box<SecretDetail>>,
         detail_tab: SecretsDetailTab,
         value_visible: bool,
@@ -181,17 +232,14 @@ impl ServiceData {
     pub fn new(service: ServiceKind) -> Self {
         match service {
             ServiceKind::Ec2 => ServiceData::Ec2 {
-                instances: Vec::new(),
-                filtered_instances: Vec::new(),
+                instances: FilterableList::new(),
             },
             ServiceKind::Ecr => ServiceData::Ecr {
-                repositories: Vec::new(),
-                filtered_repositories: Vec::new(),
+                repositories: FilterableList::new(),
                 images: Vec::new(),
             },
             ServiceKind::Ecs => ServiceData::Ecs {
-                clusters: Vec::new(),
-                filtered_clusters: Vec::new(),
+                clusters: FilterableList::new(),
                 services: Vec::new(),
                 selected_service_index: None,
                 tasks: Vec::new(),
@@ -199,20 +247,17 @@ impl ServiceData {
                 log_state: None,
             },
             ServiceKind::S3 => ServiceData::S3 {
-                buckets: Vec::new(),
-                filtered_buckets: Vec::new(),
+                buckets: FilterableList::new(),
                 objects: Vec::new(),
                 selected_bucket: None,
                 current_prefix: String::new(),
             },
             ServiceKind::Vpc => ServiceData::Vpc {
-                vpcs: Vec::new(),
-                filtered_vpcs: Vec::new(),
+                vpcs: FilterableList::new(),
                 subnets: Vec::new(),
             },
             ServiceKind::SecretsManager => ServiceData::Secrets {
-                secrets: Vec::new(),
-                filtered_secrets: Vec::new(),
+                secrets: FilterableList::new(),
                 detail: None,
                 detail_tab: SecretsDetailTab::Overview,
                 value_visible: false,
@@ -294,36 +339,24 @@ impl Tab {
     /// 現在のリストビューのフィルタ済みリスト長を返す
     pub fn filtered_list_len(&self) -> usize {
         match &self.data {
-            ServiceData::Ec2 {
-                filtered_instances, ..
-            } => filtered_instances.len(),
-            ServiceData::Ecr {
-                filtered_repositories,
-                ..
-            } => filtered_repositories.len(),
-            ServiceData::Ecs {
-                filtered_clusters, ..
-            } => filtered_clusters.len(),
-            ServiceData::S3 {
-                filtered_buckets, ..
-            } => filtered_buckets.len(),
-            ServiceData::Vpc { filtered_vpcs, .. } => filtered_vpcs.len(),
-            ServiceData::Secrets {
-                filtered_secrets, ..
-            } => filtered_secrets.len(),
+            ServiceData::Ec2 { instances, .. } => instances.len(),
+            ServiceData::Ecr { repositories, .. } => repositories.len(),
+            ServiceData::Ecs { clusters, .. } => clusters.len(),
+            ServiceData::S3 { buckets, .. } => buckets.len(),
+            ServiceData::Vpc { vpcs, .. } => vpcs.len(),
+            ServiceData::Secrets { secrets, .. } => secrets.len(),
         }
     }
 
     /// 現在のディテールビューのリスト長を返す
     pub fn detail_list_len(&self) -> usize {
         match &self.data {
-            ServiceData::Ec2 {
-                filtered_instances, ..
-            } => {
+            ServiceData::Ec2 { instances, .. } => {
                 if self.detail_tab == DetailTab::Overview {
                     Ec2DetailField::ALL.len()
                 } else {
-                    filtered_instances
+                    instances
+                        .filtered
                         .get(self.selected_index)
                         .map(|i| i.tags.len())
                         .unwrap_or(0)
@@ -363,11 +396,8 @@ impl Tab {
     pub fn apply_filter(&mut self) {
         let filter_text = self.filter_input.value().to_string();
         match &mut self.data {
-            ServiceData::Ec2 {
-                instances,
-                filtered_instances,
-            } => {
-                *filtered_instances = fuzzy_filter_items(instances, &filter_text, 1, |i| {
+            ServiceData::Ec2 { instances } => {
+                instances.filtered = fuzzy_filter_items(instances.all(), &filter_text, 1, |i| {
                     vec![
                         i.instance_id.as_str(),
                         i.name.as_str(),
@@ -376,47 +406,28 @@ impl Tab {
                     ]
                 });
             }
-            ServiceData::Ecr {
-                repositories,
-                filtered_repositories,
-                ..
-            } => {
-                *filtered_repositories = fuzzy_filter_items(repositories, &filter_text, 0, |r| {
-                    vec![r.repository_name.as_str(), r.repository_uri.as_str()]
-                });
+            ServiceData::Ecr { repositories, .. } => {
+                repositories.filtered =
+                    fuzzy_filter_items(repositories.all(), &filter_text, 0, |r| {
+                        vec![r.repository_name.as_str(), r.repository_uri.as_str()]
+                    });
             }
-            ServiceData::Ecs {
-                clusters,
-                filtered_clusters,
-                ..
-            } => {
-                *filtered_clusters = fuzzy_filter_items(clusters, &filter_text, 0, |c| {
+            ServiceData::Ecs { clusters, .. } => {
+                clusters.filtered = fuzzy_filter_items(clusters.all(), &filter_text, 0, |c| {
                     vec![c.cluster_name.as_str(), c.status.as_str()]
                 });
             }
-            ServiceData::S3 {
-                buckets,
-                filtered_buckets,
-                ..
-            } => {
-                *filtered_buckets =
-                    fuzzy_filter_items(buckets, &filter_text, 0, |b| vec![b.name.as_str()]);
+            ServiceData::S3 { buckets, .. } => {
+                buckets.filtered =
+                    fuzzy_filter_items(buckets.all(), &filter_text, 0, |b| vec![b.name.as_str()]);
             }
-            ServiceData::Vpc {
-                vpcs,
-                filtered_vpcs,
-                ..
-            } => {
-                *filtered_vpcs = fuzzy_filter_items(vpcs, &filter_text, 1, |v| {
+            ServiceData::Vpc { vpcs, .. } => {
+                vpcs.filtered = fuzzy_filter_items(vpcs.all(), &filter_text, 1, |v| {
                     vec![v.vpc_id.as_str(), v.name.as_str(), v.cidr_block.as_str()]
                 });
             }
-            ServiceData::Secrets {
-                secrets,
-                filtered_secrets,
-                ..
-            } => {
-                *filtered_secrets = fuzzy_filter_items(secrets, &filter_text, 0, |s| {
+            ServiceData::Secrets { secrets, .. } => {
+                secrets.filtered = fuzzy_filter_items(secrets.all(), &filter_text, 0, |s| {
                     vec![s.name.as_str(), s.arn.as_str()]
                 });
             }
@@ -538,12 +549,12 @@ impl Tab {
                 // S3: バケット選択時にselected_bucketを設定
                 if self.service == ServiceKind::S3
                     && let ServiceData::S3 {
-                        filtered_buckets,
+                        buckets,
                         selected_bucket,
                         current_prefix,
                         ..
                     } = &mut self.data
-                    && let Some(bucket) = filtered_buckets.get(self.selected_index)
+                    && let Some(bucket) = buckets.filtered.get(self.selected_index)
                 {
                     *selected_bucket = Some(bucket.name.clone());
                     current_prefix.clear();
@@ -752,20 +763,15 @@ impl Tab {
     pub fn copy_id(&self) {
         match (self.service, self.tab_view) {
             (ServiceKind::Ec2, _) => {
-                if let ServiceData::Ec2 {
-                    filtered_instances, ..
-                } = &self.data
-                    && let Some(instance) = filtered_instances.get(self.selected_index)
+                if let ServiceData::Ec2 { instances, .. } = &self.data
+                    && let Some(instance) = instances.filtered.get(self.selected_index)
                 {
                     let _ = cli_clipboard::set_contents(instance.instance_id.clone());
                 }
             }
             (ServiceKind::Ecr, TabView::List) => {
-                if let ServiceData::Ecr {
-                    filtered_repositories,
-                    ..
-                } = &self.data
-                    && let Some(repo) = filtered_repositories.get(self.selected_index)
+                if let ServiceData::Ecr { repositories, .. } = &self.data
+                    && let Some(repo) = repositories.filtered.get(self.selected_index)
                 {
                     let _ = cli_clipboard::set_contents(repo.repository_uri.clone());
                 }
@@ -778,17 +784,15 @@ impl Tab {
                 }
             }
             (ServiceKind::Vpc, TabView::List) => {
-                if let ServiceData::Vpc { filtered_vpcs, .. } = &self.data
-                    && let Some(vpc) = filtered_vpcs.get(self.selected_index)
+                if let ServiceData::Vpc { vpcs, .. } = &self.data
+                    && let Some(vpc) = vpcs.filtered.get(self.selected_index)
                 {
                     let _ = cli_clipboard::set_contents(vpc.vpc_id.clone());
                 }
             }
             (ServiceKind::SecretsManager, TabView::List) => {
-                if let ServiceData::Secrets {
-                    filtered_secrets, ..
-                } = &self.data
-                    && let Some(secret) = filtered_secrets.get(self.selected_index)
+                if let ServiceData::Secrets { secrets, .. } = &self.data
+                    && let Some(secret) = secrets.filtered.get(self.selected_index)
                 {
                     let _ = cli_clipboard::set_contents(secret.arn.clone());
                 }
@@ -801,10 +805,8 @@ impl Tab {
                 }
             }
             (ServiceKind::S3, TabView::List) => {
-                if let ServiceData::S3 {
-                    filtered_buckets, ..
-                } = &self.data
-                    && let Some(bucket) = filtered_buckets.get(self.selected_index)
+                if let ServiceData::S3 { buckets, .. } = &self.data
+                    && let Some(bucket) = buckets.filtered.get(self.selected_index)
                 {
                     let _ = cli_clipboard::set_contents(bucket.name.clone());
                 }

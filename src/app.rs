@@ -213,11 +213,8 @@ impl App {
     /// アクティブタブで選択中のインスタンスを返す
     pub fn selected_instance(&self) -> Option<&Instance> {
         let tab = self.active_tab()?;
-        if let crate::tab::ServiceData::Ec2 {
-            filtered_instances, ..
-        } = &tab.data
-        {
-            filtered_instances.get(tab.selected_index)
+        if let crate::tab::ServiceData::Ec2 { instances, .. } = &tab.data {
+            instances.filtered.get(tab.selected_index)
         } else {
             None
         }
@@ -648,15 +645,10 @@ impl App {
                     result,
                     Some("No instances found"),
                     true,
-                    |tab, instances| {
-                        let is_empty = instances.is_empty();
-                        if let ServiceData::Ec2 {
-                            instances: inst,
-                            filtered_instances,
-                        } = &mut tab.data
-                        {
-                            *inst = instances;
-                            *filtered_instances = inst.clone();
+                    |tab, data| {
+                        let is_empty = data.is_empty();
+                        if let ServiceData::Ec2 { instances } = &mut tab.data {
+                            instances.set_items(data);
                         }
                         is_empty
                     },
@@ -681,14 +673,8 @@ impl App {
                     true,
                     |tab, repos| {
                         let is_empty = repos.is_empty();
-                        if let ServiceData::Ecr {
-                            repositories,
-                            filtered_repositories,
-                            ..
-                        } = &mut tab.data
-                        {
-                            *repositories = repos;
-                            *filtered_repositories = repositories.clone();
+                        if let ServiceData::Ecr { repositories, .. } = &mut tab.data {
+                            repositories.set_items(repos);
                         }
                         is_empty
                     },
@@ -715,16 +701,10 @@ impl App {
                     result,
                     Some("No clusters found"),
                     true,
-                    |tab, clusters| {
-                        let is_empty = clusters.is_empty();
-                        if let ServiceData::Ecs {
-                            clusters: cls,
-                            filtered_clusters,
-                            ..
-                        } = &mut tab.data
-                        {
-                            *cls = clusters;
-                            *filtered_clusters = cls.clone();
+                    |tab, data| {
+                        let is_empty = data.is_empty();
+                        if let ServiceData::Ecs { clusters, .. } = &mut tab.data {
+                            clusters.set_items(data);
                         }
                         is_empty
                     },
@@ -766,16 +746,10 @@ impl App {
                     result,
                     Some("No buckets found"),
                     true,
-                    |tab, buckets| {
-                        let is_empty = buckets.is_empty();
-                        if let ServiceData::S3 {
-                            buckets: bkts,
-                            filtered_buckets,
-                            ..
-                        } = &mut tab.data
-                        {
-                            *bkts = buckets;
-                            *filtered_buckets = bkts.clone();
+                    |tab, data| {
+                        let is_empty = data.is_empty();
+                        if let ServiceData::S3 { buckets, .. } = &mut tab.data {
+                            buckets.set_items(data);
                         }
                         is_empty
                     },
@@ -795,16 +769,10 @@ impl App {
                     result,
                     Some("No VPCs found"),
                     true,
-                    |tab, vpcs| {
-                        let is_empty = vpcs.is_empty();
-                        if let ServiceData::Vpc {
-                            vpcs: vs,
-                            filtered_vpcs,
-                            ..
-                        } = &mut tab.data
-                        {
-                            *vs = vpcs;
-                            *filtered_vpcs = vs.clone();
+                    |tab, data| {
+                        let is_empty = data.is_empty();
+                        if let ServiceData::Vpc { vpcs, .. } = &mut tab.data {
+                            vpcs.set_items(data);
                         }
                         is_empty
                     },
@@ -831,16 +799,10 @@ impl App {
                     result,
                     Some("No secrets found"),
                     true,
-                    |tab, secrets| {
-                        let is_empty = secrets.is_empty();
-                        if let ServiceData::Secrets {
-                            secrets: secs,
-                            filtered_secrets,
-                            ..
-                        } = &mut tab.data
-                        {
-                            *secs = secrets;
-                            *filtered_secrets = secs.clone();
+                    |tab, data| {
+                        let is_empty = data.is_empty();
+                        if let ServiceData::Secrets { secrets, .. } = &mut tab.data {
+                            secrets.set_items(data);
                         }
                         is_empty
                     },
@@ -872,17 +834,11 @@ impl App {
             }
             TabEvent::NavigateVpcLoaded(result) => {
                 match result {
-                    Ok((vpcs, subnets)) => {
+                    Ok((vpc_data, subnet_data)) => {
                         if let Some(tab) = self.find_tab_mut(tab_id) {
-                            if let ServiceData::Vpc {
-                                vpcs: vs,
-                                filtered_vpcs,
-                                subnets: subs,
-                            } = &mut tab.data
-                            {
-                                *vs = vpcs;
-                                *filtered_vpcs = vs.clone();
-                                *subs = subnets;
+                            if let ServiceData::Vpc { vpcs, subnets } = &mut tab.data {
+                                vpcs.set_items(vpc_data);
+                                *subnets = subnet_data;
                             }
                             tab.loading = false;
                         }
@@ -1325,11 +1281,9 @@ impl App {
                     return;
                 }
                 let bucket_name = self.active_tab().and_then(|tab| {
-                    if let crate::tab::ServiceData::S3 {
-                        filtered_buckets, ..
-                    } = &tab.data
-                    {
-                        filtered_buckets
+                    if let crate::tab::ServiceData::S3 { buckets, .. } = &tab.data {
+                        buckets
+                            .filtered
                             .get(tab.selected_index)
                             .map(|b| b.name.clone())
                     } else {
@@ -1393,11 +1347,9 @@ impl App {
                     return;
                 }
                 let secret_name = self.active_tab().and_then(|tab| {
-                    if let crate::tab::ServiceData::Secrets {
-                        filtered_secrets, ..
-                    } = &tab.data
-                    {
-                        filtered_secrets
+                    if let crate::tab::ServiceData::Secrets { secrets, .. } = &tab.data {
+                        secrets
+                            .filtered
                             .get(tab.selected_index)
                             .map(|s| s.name.clone())
                     } else {
@@ -1549,8 +1501,8 @@ impl App {
         // 現在のビューのラベルを追加
         let current_label = match self.current_view()? {
             (ServiceKind::Vpc, crate::tab::TabView::Detail) => {
-                if let crate::tab::ServiceData::Vpc { filtered_vpcs, .. } = &tab.data {
-                    filtered_vpcs
+                if let crate::tab::ServiceData::Vpc { vpcs, .. } = &tab.data {
+                    vpcs.filtered
                         .first()
                         .map(|v| v.vpc_id.as_str())
                         .unwrap_or("VPC")
@@ -1609,16 +1561,10 @@ mod tests {
         app
     }
 
-    fn set_ec2_instances(app: &mut App, instances: Vec<Instance>) {
+    fn set_ec2_instances(app: &mut App, data: Vec<Instance>) {
         let tab = app.active_tab_mut().unwrap();
-        if let ServiceData::Ec2 {
-            instances: inst,
-            filtered_instances,
-            ..
-        } = &mut tab.data
-        {
-            *filtered_instances = instances.clone();
-            *inst = instances;
+        if let ServiceData::Ec2 { instances } = &mut tab.data {
+            instances.set_items(data);
         }
         tab.loading = false;
     }
@@ -1920,13 +1866,9 @@ mod tests {
         ));
         let tab = app.active_tab().unwrap();
         assert!(!tab.loading);
-        if let ServiceData::Ec2 {
-            instances,
-            filtered_instances,
-        } = &tab.data
-        {
-            assert_eq!(instances.len(), 2);
-            assert_eq!(filtered_instances.len(), 2);
+        if let ServiceData::Ec2 { instances } = &tab.data {
+            assert_eq!(instances.all().len(), 2);
+            assert_eq!(instances.filtered.len(), 2);
         } else {
             panic!("Expected Ec2 ServiceData");
         }
@@ -2257,27 +2199,19 @@ mod tests {
     fn apply_filter_filters_tab_data_when_on_tab() {
         let mut app = app_with_ec2_tab();
         let tab = app.active_tab_mut().unwrap();
-        if let ServiceData::Ec2 {
-            instances,
-            filtered_instances,
-        } = &mut tab.data
-        {
-            *instances = vec![
+        if let ServiceData::Ec2 { instances } = &mut tab.data {
+            instances.set_items(vec![
                 create_test_instance("i-001", "web", InstanceState::Running),
                 create_test_instance("i-002", "api", InstanceState::Stopped),
-            ];
-            *filtered_instances = instances.clone();
+            ]);
         }
         tab.filter_input = Input::from("web");
         tab.loading = false;
         app.apply_filter();
         let tab = app.active_tab().unwrap();
-        if let ServiceData::Ec2 {
-            filtered_instances, ..
-        } = &tab.data
-        {
-            assert_eq!(filtered_instances.len(), 1);
-            assert_eq!(filtered_instances[0].name, "web");
+        if let ServiceData::Ec2 { instances } = &tab.data {
+            assert_eq!(instances.filtered.len(), 1);
+            assert_eq!(instances.filtered[0].name, "web");
         } else {
             panic!("Expected Ec2 data");
         }
@@ -2515,13 +2449,12 @@ mod tests {
         let tab = app.active_tab_mut().unwrap();
         tab.mode = Mode::Filter;
         tab.filter_input = Input::from("web");
-        if let ServiceData::Ec2 {
-            instances,
-            filtered_instances,
-        } = &mut tab.data
-        {
-            *instances = vec![create_test_instance("i-001", "web", InstanceState::Running)];
-            *filtered_instances = instances.clone();
+        if let ServiceData::Ec2 { instances } = &mut tab.data {
+            instances.set_items(vec![create_test_instance(
+                "i-001",
+                "web",
+                InstanceState::Running,
+            )]);
         }
         app.dispatch(Action::CancelFilter);
         let tab = app.active_tab().unwrap();

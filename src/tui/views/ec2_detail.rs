@@ -317,10 +317,9 @@ mod tests {
         if let Some(tab) = app.active_tab_mut() {
             tab.tab_view = TabView::Detail;
             tab.loading = false;
-            tab.data = ServiceData::Ec2 {
-                instances: vec![instance.clone()],
-                filtered_instances: vec![instance],
-            };
+            if let ServiceData::Ec2 { instances, .. } = &mut tab.data {
+                instances.set_items(vec![instance]);
+            }
             tab.selected_index = 0;
         }
         app

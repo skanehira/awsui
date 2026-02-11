@@ -81,11 +81,8 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
     let instances: Vec<&Instance> = tab
         .and_then(|t| {
-            if let crate::tab::ServiceData::Ec2 {
-                filtered_instances, ..
-            } = &t.data
-            {
-                Some(filtered_instances.iter().collect())
+            if let crate::tab::ServiceData::Ec2 { instances, .. } = &t.data {
+                Some(instances.filtered.iter().collect())
             } else {
                 None
             }
@@ -189,10 +186,12 @@ mod tests {
         app.create_tab(ServiceKind::Ec2);
         if let Some(tab) = app.active_tab_mut() {
             tab.loading = false;
-            tab.data = ServiceData::Ec2 {
-                instances: instances.clone(),
-                filtered_instances: instances,
-            };
+            if let ServiceData::Ec2 {
+                instances: inst, ..
+            } = &mut tab.data
+            {
+                inst.set_items(instances);
+            }
         }
         app
     }
