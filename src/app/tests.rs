@@ -2,6 +2,7 @@ use super::*;
 use crate::action::Action;
 use crate::aws::model::InstanceState;
 use crate::cli::DeletePermissions;
+use crate::config::SsoProfile;
 use crate::error::AppError;
 use crate::event::TabEvent;
 use crate::tab::{ServiceData, TabView};
@@ -1116,4 +1117,246 @@ fn danger_confirm_cancel_sets_normal_mode() {
     });
     app.dispatch(Action::DangerConfirmCancel);
     assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+}
+
+// ──────────────────────────────────────────────
+// ProfileSelector テスト
+// ──────────────────────────────────────────────
+
+fn test_profiles() -> Vec<SsoProfile> {
+    vec![
+        SsoProfile {
+            name: "dev-account".to_string(),
+            region: Some("ap-northeast-1".to_string()),
+            sso_start_url: "https://dev.awsapps.com/start".to_string(),
+            sso_session: None,
+        },
+        SsoProfile {
+            name: "staging".to_string(),
+            region: Some("us-east-1".to_string()),
+            sso_start_url: "https://staging.awsapps.com/start".to_string(),
+            sso_session: None,
+        },
+    ]
+}
+
+fn app_with_profile_selector() -> App {
+    App::new_with_profile_selector(test_profiles(), DeletePermissions::None)
+}
+
+#[test]
+fn new_with_profile_selector_initializes_with_profile_selector_when_profiles_given() {
+    let app = app_with_profile_selector();
+
+    assert!(app.profile.is_none());
+    assert!(app.profile_selector.is_some());
+    assert!(!app.show_dashboard);
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert_eq!(ps.profiles.len(), 2);
+    assert_eq!(ps.filtered_profiles.len(), 2);
+    assert_eq!(ps.selected_index, 0);
+    assert_eq!(ps.mode, Mode::Normal);
+}
+
+#[test]
+fn complete_profile_selection_transitions_to_dashboard_when_profile_selected() {
+    let mut app = app_with_profile_selector();
+
+    app.complete_profile_selection(
+        "dev-account".to_string(),
+        Some("ap-northeast-1".to_string()),
+    );
+
+    assert_eq!(app.profile, Some("dev-account".to_string()));
+    assert_eq!(app.region, Some("ap-northeast-1".to_string()));
+    assert!(app.profile_selector.is_none());
+    assert!(app.show_dashboard);
+}
+
+#[test]
+fn dispatch_move_down_on_profile_selector_increments_index() {
+    let mut app = app_with_profile_selector();
+    app.dispatch(Action::MoveDown);
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert_eq!(ps.selected_index, 1);
+}
+
+#[test]
+fn dispatch_move_up_on_profile_selector_decrements_index() {
+    let mut app = app_with_profile_selector();
+    app.profile_selector.as_mut().unwrap().selected_index = 1;
+    app.dispatch(Action::MoveUp);
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert_eq!(ps.selected_index, 0);
+}
+
+#[test]
+fn dispatch_quit_on_profile_selector_sets_should_quit() {
+    let mut app = app_with_profile_selector();
+    app.dispatch(Action::Quit);
+    assert!(app.should_quit);
+}
+
+#[test]
+fn dispatch_start_filter_on_profile_selector_sets_filter_mode() {
+    let mut app = app_with_profile_selector();
+    app.dispatch(Action::StartFilter);
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert_eq!(ps.mode, Mode::Filter);
+}
+
+#[test]
+fn dispatch_confirm_filter_on_profile_selector_sets_normal_mode() {
+    let mut app = app_with_profile_selector();
+    app.profile_selector.as_mut().unwrap().mode = Mode::Filter;
+    app.dispatch(Action::ConfirmFilter);
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert_eq!(ps.mode, Mode::Normal);
+}
+
+#[test]
+fn dispatch_cancel_filter_on_profile_selector_resets_filter() {
+    let mut app = app_with_profile_selector();
+    let ps = app.profile_selector.as_mut().unwrap();
+    ps.mode = Mode::Filter;
+    ps.filter_input = "dev".into();
+    ps.apply_filter();
+
+    app.dispatch(Action::CancelFilter);
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert_eq!(ps.mode, Mode::Normal);
+    assert!(ps.filter_input.value().is_empty());
+    assert_eq!(ps.filtered_profiles.len(), 2);
+}
+
+#[test]
+fn dispatch_filter_handle_input_on_profile_selector_updates_filter() {
+    let mut app = app_with_profile_selector();
+    app.profile_selector.as_mut().unwrap().mode = Mode::Filter;
+
+    app.dispatch(Action::FilterHandleInput(
+        tui_input::InputRequest::InsertChar('d'),
+    ));
+    app.dispatch(Action::FilterHandleInput(
+        tui_input::InputRequest::InsertChar('e'),
+    ));
+    app.dispatch(Action::FilterHandleInput(
+        tui_input::InputRequest::InsertChar('v'),
+    ));
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert_eq!(ps.filter_input.value(), "dev");
+    assert_eq!(ps.filtered_profiles.len(), 1);
+    assert_eq!(ps.filtered_profiles[0].name, "dev-account");
+}
+
+#[test]
+fn dispatch_move_to_top_on_profile_selector_sets_index_to_zero() {
+    let mut app = app_with_profile_selector();
+    app.profile_selector.as_mut().unwrap().selected_index = 1;
+    app.dispatch(Action::MoveToTop);
+
+    assert_eq!(app.profile_selector.as_ref().unwrap().selected_index, 0);
+}
+
+#[test]
+fn dispatch_move_to_bottom_on_profile_selector_sets_index_to_last() {
+    let mut app = app_with_profile_selector();
+    app.dispatch(Action::MoveToBottom);
+
+    assert_eq!(app.profile_selector.as_ref().unwrap().selected_index, 1);
+}
+
+#[test]
+fn dispatch_cancel_sso_login_resets_logging_in_state() {
+    let mut app = app_with_profile_selector();
+    let ps = app.profile_selector.as_mut().unwrap();
+    ps.logging_in = true;
+    ps.login_output = vec!["line1".to_string()];
+
+    app.dispatch(Action::CancelSsoLogin);
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert!(!ps.logging_in);
+    assert!(ps.login_output.is_empty());
+}
+
+#[test]
+fn handle_event_sso_login_output_appends_line_to_login_output() {
+    let mut app = app_with_profile_selector();
+    app.profile_selector.as_mut().unwrap().logging_in = true;
+
+    app.handle_event(AppEvent::SsoLoginOutput("Opening browser...".to_string()));
+    app.handle_event(AppEvent::SsoLoginOutput(
+        "Waiting for authorization...".to_string(),
+    ));
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert_eq!(ps.login_output.len(), 2);
+    assert_eq!(ps.login_output[0], "Opening browser...");
+    assert_eq!(ps.login_output[1], "Waiting for authorization...");
+}
+
+#[test]
+fn handle_event_sso_login_completed_ok_transitions_to_dashboard() {
+    let mut app = app_with_profile_selector();
+    let ps = app.profile_selector.as_mut().unwrap();
+    ps.logging_in = true;
+    ps.login_output = vec!["line1".to_string()];
+
+    app.handle_event(AppEvent::SsoLoginCompleted(Ok((
+        "dev-account".to_string(),
+        Some("ap-northeast-1".to_string()),
+    ))));
+
+    assert_eq!(app.profile, Some("dev-account".to_string()));
+    assert_eq!(app.region, Some("ap-northeast-1".to_string()));
+    assert!(app.profile_selector.is_none());
+    assert!(app.show_dashboard);
+}
+
+#[test]
+fn handle_event_sso_login_completed_err_resets_state_and_shows_error() {
+    let mut app = app_with_profile_selector();
+    let ps = app.profile_selector.as_mut().unwrap();
+    ps.logging_in = true;
+    ps.login_output = vec!["line1".to_string()];
+
+    app.handle_event(AppEvent::SsoLoginCompleted(Err(AppError::AwsApi(
+        "login failed".to_string(),
+    ))));
+
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert!(!ps.logging_in);
+    assert!(ps.login_output.is_empty());
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+    assert_eq!(msg.title, "SSO Login Failed");
+    assert_eq!(msg.body, "AWS API error: login failed");
+}
+
+#[test]
+fn dispatch_enter_on_profile_selector_returns_start_sso_login_when_token_not_found() {
+    let mut app = app_with_profile_selector();
+
+    // テスト環境ではSSOトークンキャッシュが存在しないのでNotFoundになる
+    let side_effect = app.dispatch(Action::Enter);
+
+    assert_eq!(
+        side_effect,
+        SideEffect::StartSsoLogin {
+            profile_name: "dev-account".to_string(),
+            region: Some("ap-northeast-1".to_string()),
+        }
+    );
+    let ps = app.profile_selector.as_ref().unwrap();
+    assert!(ps.logging_in);
+    assert!(ps.login_output.is_empty());
 }

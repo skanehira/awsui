@@ -1,5 +1,7 @@
 use tui_input::Input;
 
+use crate::config::SsoProfile;
+use crate::fuzzy::fuzzy_filter_items;
 use crate::service::ServiceKind;
 use crate::tab::TabView;
 
@@ -254,6 +256,74 @@ pub enum SideEffect {
     Confirm(ConfirmAction),
     FormSubmit(FormContext),
     DangerAction(DangerAction),
+    StartSsoLogin {
+        profile_name: String,
+        region: Option<String>,
+    },
+}
+
+/// プロファイル選択画面の状態
+pub struct ProfileSelectorState {
+    pub profiles: Vec<SsoProfile>,
+    pub filtered_profiles: Vec<SsoProfile>,
+    pub selected_index: usize,
+    pub filter_input: Input,
+    pub mode: Mode,
+    pub logging_in: bool,
+    pub login_output: Vec<String>,
+}
+
+impl ProfileSelectorState {
+    pub fn new(profiles: Vec<SsoProfile>) -> Self {
+        let filtered_profiles = profiles.clone();
+        Self {
+            profiles,
+            filtered_profiles,
+            selected_index: 0,
+            filter_input: Input::default(),
+            mode: Mode::Normal,
+            logging_in: false,
+            login_output: Vec::new(),
+        }
+    }
+
+    pub fn apply_filter(&mut self) {
+        self.filtered_profiles =
+            fuzzy_filter_items(&self.profiles, self.filter_input.value(), 0, |p| {
+                vec![&p.name, p.region.as_deref().unwrap_or(""), &p.sso_start_url]
+            });
+        self.selected_index = 0;
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.filter_input = Input::default();
+        self.filtered_profiles = self.profiles.clone();
+        self.selected_index = 0;
+    }
+
+    pub fn selected_profile(&self) -> Option<&SsoProfile> {
+        self.filtered_profiles.get(self.selected_index)
+    }
+
+    pub fn move_up(&mut self) {
+        self.selected_index = self.selected_index.saturating_sub(1);
+    }
+
+    pub fn move_down(&mut self) {
+        if !self.filtered_profiles.is_empty() {
+            self.selected_index = (self.selected_index + 1).min(self.filtered_profiles.len() - 1);
+        }
+    }
+
+    pub fn move_to_top(&mut self) {
+        self.selected_index = 0;
+    }
+
+    pub fn move_to_bottom(&mut self) {
+        if !self.filtered_profiles.is_empty() {
+            self.selected_index = self.filtered_profiles.len() - 1;
+        }
+    }
 }
 
 /// サービスピッカーの状態
@@ -261,4 +331,177 @@ pub struct ServicePickerState {
     pub selected_index: usize,
     pub filter_input: Input,
     pub filtered_services: Vec<ServiceKind>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SsoProfile;
+
+    fn test_profiles() -> Vec<SsoProfile> {
+        vec![
+            SsoProfile {
+                name: "dev-account".to_string(),
+                region: Some("ap-northeast-1".to_string()),
+                sso_start_url: "https://dev.awsapps.com/start".to_string(),
+                sso_session: None,
+            },
+            SsoProfile {
+                name: "staging".to_string(),
+                region: Some("us-east-1".to_string()),
+                sso_start_url: "https://staging.awsapps.com/start".to_string(),
+                sso_session: None,
+            },
+            SsoProfile {
+                name: "production".to_string(),
+                region: Some("ap-northeast-1".to_string()),
+                sso_start_url: "https://prod.awsapps.com/start".to_string(),
+                sso_session: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn profile_selector_new_returns_all_profiles_when_initialized() {
+        let profiles = test_profiles();
+        let state = ProfileSelectorState::new(profiles.clone());
+
+        assert_eq!(state.profiles, profiles);
+        assert_eq!(state.filtered_profiles, profiles);
+        assert_eq!(state.selected_index, 0);
+        assert_eq!(state.mode, Mode::Normal);
+        assert!(!state.logging_in);
+        assert!(state.login_output.is_empty());
+    }
+
+    #[test]
+    fn profile_selector_apply_filter_returns_matching_profiles_when_filter_text_set() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles);
+        state.filter_input = "dev".into();
+
+        state.apply_filter();
+
+        assert_eq!(state.filtered_profiles.len(), 1);
+        assert_eq!(state.filtered_profiles[0].name, "dev-account");
+        assert_eq!(state.selected_index, 0);
+    }
+
+    #[test]
+    fn profile_selector_apply_filter_returns_all_profiles_when_filter_empty() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles.clone());
+        state.filter_input = "".into();
+
+        state.apply_filter();
+
+        assert_eq!(state.filtered_profiles.len(), 3);
+        assert_eq!(state.filtered_profiles, profiles);
+    }
+
+    #[test]
+    fn profile_selector_apply_filter_resets_selected_index_when_filter_applied() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles);
+        state.selected_index = 2;
+        state.filter_input = "staging".into();
+
+        state.apply_filter();
+
+        assert_eq!(state.selected_index, 0);
+    }
+
+    #[test]
+    fn profile_selector_move_down_increments_index_when_not_at_bottom() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles);
+
+        state.move_down();
+
+        assert_eq!(state.selected_index, 1);
+    }
+
+    #[test]
+    fn profile_selector_move_down_stays_at_bottom_when_at_last_item() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles);
+        state.selected_index = 2;
+
+        state.move_down();
+
+        assert_eq!(state.selected_index, 2);
+    }
+
+    #[test]
+    fn profile_selector_move_up_decrements_index_when_not_at_top() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles);
+        state.selected_index = 2;
+
+        state.move_up();
+
+        assert_eq!(state.selected_index, 1);
+    }
+
+    #[test]
+    fn profile_selector_move_up_stays_at_top_when_at_first_item() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles);
+
+        state.move_up();
+
+        assert_eq!(state.selected_index, 0);
+    }
+
+    #[test]
+    fn profile_selector_move_to_top_sets_index_to_zero() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles);
+        state.selected_index = 2;
+
+        state.move_to_top();
+
+        assert_eq!(state.selected_index, 0);
+    }
+
+    #[test]
+    fn profile_selector_move_to_bottom_sets_index_to_last_item() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles);
+
+        state.move_to_bottom();
+
+        assert_eq!(state.selected_index, 2);
+    }
+
+    #[test]
+    fn profile_selector_clear_filter_restores_all_profiles() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles.clone());
+        state.filter_input = "dev".into();
+        state.apply_filter();
+        assert_eq!(state.filtered_profiles.len(), 1);
+
+        state.clear_filter();
+
+        assert_eq!(state.filtered_profiles, profiles);
+        assert_eq!(state.selected_index, 0);
+        assert_eq!(state.filter_input.value(), "");
+    }
+
+    #[test]
+    fn profile_selector_selected_profile_returns_profile_at_index() {
+        let profiles = test_profiles();
+        let mut state = ProfileSelectorState::new(profiles.clone());
+        state.selected_index = 1;
+
+        assert_eq!(state.selected_profile(), Some(&profiles[1]));
+    }
+
+    #[test]
+    fn profile_selector_selected_profile_returns_none_when_empty() {
+        let state = ProfileSelectorState::new(vec![]);
+
+        assert_eq!(state.selected_profile(), None);
+    }
 }

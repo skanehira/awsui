@@ -17,6 +17,17 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
         return handle_help_key(key);
     }
 
+    // プロファイル選択画面
+    if let Some(ps) = &app.profile_selector {
+        if ps.logging_in {
+            return handle_sso_login_key(key);
+        }
+        return match ps.mode {
+            Mode::Filter => handle_filter_key(key),
+            _ => handle_profile_select_key(key),
+        };
+    }
+
     // サービスピッカー表示中
     if app.service_picker.is_some() {
         return handle_picker_key(key);
@@ -149,6 +160,29 @@ fn handle_picker_key(key: KeyEvent) -> Action {
                 Action::Noop
             }
         }
+    }
+}
+
+/// プロファイル選択画面のキー処理
+fn handle_profile_select_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Enter => Action::Enter,
+        KeyCode::Char('/') => Action::StartFilter,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+        _ => Action::Noop,
+    }
+}
+
+/// SSO loginダイアログ表示中のキー処理
+fn handle_sso_login_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::CancelSsoLogin,
+        _ => Action::Noop,
     }
 }
 
@@ -1191,5 +1225,84 @@ mod tests {
         }
         let action = handle_key(&app, key_char('a'));
         assert!(matches!(action, Action::FilterHandleInput(_)));
+    }
+
+    // ──────────────────────────────────────────────
+    // プロファイル選択画面テスト
+    // ──────────────────────────────────────────────
+
+    fn app_with_profile_selector() -> App {
+        use crate::cli::DeletePermissions;
+        use crate::config::SsoProfile;
+        let profiles = vec![
+            SsoProfile {
+                name: "dev".to_string(),
+                region: Some("ap-northeast-1".to_string()),
+                sso_start_url: "https://dev.awsapps.com/start".to_string(),
+                sso_session: None,
+            },
+            SsoProfile {
+                name: "staging".to_string(),
+                region: Some("us-east-1".to_string()),
+                sso_start_url: "https://staging.awsapps.com/start".to_string(),
+                sso_session: None,
+            },
+        ];
+        App::new_with_profile_selector(profiles, DeletePermissions::None)
+    }
+
+    #[rstest]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key(KeyCode::Down), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key(KeyCode::Up), Action::MoveUp)]
+    #[case(key_char('g'), Action::MoveToTop)]
+    #[case(key_char('G'), Action::MoveToBottom)]
+    #[case(key(KeyCode::Enter), Action::Enter)]
+    #[case(key_char('/'), Action::StartFilter)]
+    #[case(key_char('q'), Action::Quit)]
+    #[case(key(KeyCode::Esc), Action::Quit)]
+    #[case(key_char('?'), Action::ShowHelp)]
+    #[case(key_char('x'), Action::Noop)]
+    fn handle_key_returns_expected_action_when_profile_select_normal(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_profile_selector();
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    #[rstest]
+    #[case(key(KeyCode::Enter), Action::ConfirmFilter)]
+    #[case(key(KeyCode::Esc), Action::CancelFilter)]
+    fn handle_key_returns_expected_action_when_profile_select_filter(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let mut app = app_with_profile_selector();
+        app.profile_selector.as_mut().unwrap().mode = Mode::Filter;
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    #[test]
+    fn handle_key_returns_filter_handle_input_when_char_in_profile_select_filter() {
+        let mut app = app_with_profile_selector();
+        app.profile_selector.as_mut().unwrap().mode = Mode::Filter;
+        let action = handle_key(&app, key_char('d'));
+        assert!(matches!(action, Action::FilterHandleInput(_)));
+    }
+
+    #[test]
+    fn handle_key_returns_cancel_sso_login_when_esc_during_login() {
+        let mut app = app_with_profile_selector();
+        app.profile_selector.as_mut().unwrap().logging_in = true;
+        assert_eq!(handle_key(&app, key(KeyCode::Esc)), Action::CancelSsoLogin);
+    }
+
+    #[test]
+    fn handle_key_returns_noop_when_other_key_during_login() {
+        let mut app = app_with_profile_selector();
+        app.profile_selector.as_mut().unwrap().logging_in = true;
+        assert_eq!(handle_key(&app, key_char('j')), Action::Noop);
     }
 }

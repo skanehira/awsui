@@ -66,5 +66,7 @@ pub enum Action {
     ContainerSelectDown,
     ContainerSelectConfirm,
     ContainerSelectCancel,
+    /// SSO loginダイアログでEsc押下時
+    CancelSsoLogin,
     Noop,
 }

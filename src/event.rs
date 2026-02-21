@@ -71,4 +71,10 @@ pub enum AppEvent {
 
     /// CRUD操作の完了（汎用：成功メッセージまたはエラー）
     CrudCompleted(TabId, Result<String, AppError>),
+
+    /// SSO loginプロセスからのリアルタイム出力行（ダイアログ表示用）
+    SsoLoginOutput(String),
+
+    /// SSO login完了（成功: (プロファイル名, リージョン)、失敗: エラー）
+    SsoLoginCompleted(Result<(String, Option<String>), AppError>),
 }

@@ -1,0 +1,24 @@
+---
+source: src/tui/views/profile_select.rs
+expression: buffer_to_string(&terminal)
+---
+┌ Select Profile ────────────────────────────────────────────────────┐
+│Name                 Region             URL                         │
+│dev-account          ap-northeast-1     https://dev.awsapps.com/star│
+│staging              us-east-1          https://staging.awsapps.com/│
+│production           ap-northeast-1     https://prod.awsapps.com/sta│
+│             ┌ SSO Login ─────────────────────────────┐             │
+│             │Attempting to automatically open the SSO│             │
+│             │authorization page in your browser.     │             │
+│             │https://device.sso.ap-northeast-1.amazon│             │
+│             │aws.com/                                │             │
+│             │     ⠋ Waiting for authentication...    │             │
+│             │                                        │             │
+│             │              [Esc] Cancel              │             │
+│             └────────────────────────────────────────┘             │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+ j/k:move  Enter:select  /:filter  q:quit

@@ -9,6 +9,7 @@ use tui_input::Input;
 use crate::action::Action;
 use crate::aws::model::{Instance, InstanceState};
 use crate::cli::DeletePermissions;
+use crate::config::SsoProfile;
 use crate::event::AppEvent;
 use crate::fuzzy::fuzzy_filter_items;
 use crate::service::ServiceKind;
@@ -33,6 +34,9 @@ pub struct App {
     // ダッシュボード
     pub show_dashboard: bool,
     pub dashboard: DashboardState,
+
+    // プロファイル選択画面
+    pub profile_selector: Option<ProfileSelectorState>,
 
     // サービスピッカー（Ctrl+tポップアップ）
     pub service_picker: Option<ServicePickerState>,
@@ -73,12 +77,136 @@ impl App {
             next_tab_id: 0,
             show_dashboard: true,
             dashboard: DashboardState::new(),
+            profile_selector: None,
             service_picker: None,
             delete_permissions,
             pending_log_configs: None,
             event_tx,
             event_rx,
         }
+    }
+
+    /// プロファイル選択画面から開始する初期化
+    pub fn new_with_profile_selector(
+        profiles: Vec<SsoProfile>,
+        delete_permissions: DeletePermissions,
+    ) -> Self {
+        let (event_tx, event_rx) = mpsc::channel(32);
+        Self {
+            should_quit: false,
+            message: None,
+            show_help: false,
+            profile: None,
+            region: None,
+            tabs: Vec::new(),
+            active_tab_index: 0,
+            next_tab_id: 0,
+            show_dashboard: false,
+            dashboard: DashboardState::new(),
+            profile_selector: Some(ProfileSelectorState::new(profiles)),
+            service_picker: None,
+            delete_permissions,
+            pending_log_configs: None,
+            event_tx,
+            event_rx,
+        }
+    }
+
+    /// プロファイル選択完了後の状態遷移
+    pub fn complete_profile_selection(&mut self, profile: String, region: Option<String>) {
+        self.profile = Some(profile);
+        self.region = region;
+        self.profile_selector = None;
+        self.show_dashboard = true;
+    }
+
+    /// プロファイル選択画面のアクション処理
+    fn dispatch_profile_selector(&mut self, action: Action) -> SideEffect {
+        let is_filter = self
+            .profile_selector
+            .as_ref()
+            .is_some_and(|ps| ps.mode == Mode::Filter);
+
+        if is_filter {
+            if let Some(ps) = &mut self.profile_selector {
+                match action {
+                    Action::ConfirmFilter => ps.mode = Mode::Normal,
+                    Action::CancelFilter => {
+                        ps.clear_filter();
+                        ps.mode = Mode::Normal;
+                    }
+                    Action::FilterHandleInput(req) => {
+                        ps.filter_input.handle(req);
+                        ps.apply_filter();
+                    }
+                    _ => {}
+                }
+            }
+            return SideEffect::None;
+        }
+
+        match action {
+            Action::Quit => self.should_quit = true,
+            Action::MoveUp => {
+                if let Some(ps) = &mut self.profile_selector {
+                    ps.move_up();
+                }
+            }
+            Action::MoveDown => {
+                if let Some(ps) = &mut self.profile_selector {
+                    ps.move_down();
+                }
+            }
+            Action::MoveToTop => {
+                if let Some(ps) = &mut self.profile_selector {
+                    ps.move_to_top();
+                }
+            }
+            Action::MoveToBottom => {
+                if let Some(ps) = &mut self.profile_selector {
+                    ps.move_to_bottom();
+                }
+            }
+            Action::StartFilter => {
+                if let Some(ps) = &mut self.profile_selector {
+                    ps.mode = Mode::Filter;
+                }
+            }
+            Action::Enter => {
+                if let Some(ps) = &self.profile_selector
+                    && !ps.logging_in
+                    && let Some(profile) = ps.selected_profile().cloned()
+                {
+                    let profile_name = profile.name.clone();
+                    let region = profile.region.clone();
+
+                    match crate::sso::check_sso_token(&profile) {
+                        crate::sso::SsoTokenStatus::Valid => {
+                            self.complete_profile_selection(profile_name, region);
+                        }
+                        crate::sso::SsoTokenStatus::Expired
+                        | crate::sso::SsoTokenStatus::NotFound => {
+                            if let Some(ps) = &mut self.profile_selector {
+                                ps.logging_in = true;
+                                ps.login_output.clear();
+                            }
+                            return SideEffect::StartSsoLogin {
+                                profile_name,
+                                region,
+                            };
+                        }
+                    }
+                }
+            }
+            Action::CancelSsoLogin => {
+                if let Some(ps) = &mut self.profile_selector {
+                    ps.logging_in = false;
+                    ps.login_output.clear();
+                }
+            }
+            _ => {}
+        }
+        SideEffect::None
     }
 
     /// 新しいタブを作成して追加し、そのTabIdを返す
@@ -302,6 +430,11 @@ impl App {
                 }
                 _ => return SideEffect::None,
             }
+        }
+
+        // プロファイル選択画面の処理
+        if self.profile_selector.is_some() {
+            return self.dispatch_profile_selector(action);
         }
 
         // タブ固有モードの処理
@@ -586,7 +719,8 @@ impl App {
             | Action::ContainerSelectUp
             | Action::ContainerSelectDown
             | Action::ContainerSelectConfirm
-            | Action::ContainerSelectCancel => {}
+            | Action::ContainerSelectCancel
+            | Action::CancelSsoLogin => {}
         }
         SideEffect::None
     }
@@ -606,6 +740,23 @@ impl App {
                 }
                 Err(e) => {
                     self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            AppEvent::SsoLoginOutput(line) => {
+                if let Some(ps) = &mut self.profile_selector {
+                    ps.login_output.push(line);
+                }
+            }
+            AppEvent::SsoLoginCompleted(result) => match result {
+                Ok((profile_name, region)) => {
+                    self.complete_profile_selection(profile_name, region);
+                }
+                Err(e) => {
+                    if let Some(ps) = &mut self.profile_selector {
+                        ps.logging_in = false;
+                        ps.login_output.clear();
+                    }
+                    self.show_message(MessageLevel::Error, "SSO Login Failed", e.to_string());
                 }
             },
         }

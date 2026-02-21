@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::sync::Arc;
 
 use awsui::app::{App, ConfirmAction, Mode, SideEffect};
@@ -28,7 +27,6 @@ use awsui::tui::components::help::HelpPopup;
 use awsui::tui::components::tab_bar::TabBar;
 use clap::Parser;
 use ratatui::Frame;
-use skim::prelude::*;
 use tokio::sync::mpsc;
 
 /// 各サービスのクライアントをまとめて保持する
@@ -73,33 +71,19 @@ async fn main() -> anyhow::Result<()> {
     let delete_permissions =
         DeletePermissions::from_cli(cli.allow_delete.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
 
-    // 1. SSOプロファイル読み込み + プロファイル選択
-    let (selected_profile, region) = if let Some(profile_name) = cli.profile {
-        // --profile が指定されていればインタラクティブ選択をスキップ
+    // 1. SSOプロファイル読み込み + App初期化
+    let mut app = if let Some(profile_name) = cli.profile {
+        // --profile が指定されていればプロファイル選択画面をスキップ
         let profiles = config::load_sso_profiles().unwrap_or_default();
         let region = config::get_region_for_profile(&profiles, &profile_name);
-        (profile_name, region)
-    } else {
-        let profiles = config::load_sso_profiles()?;
-        let profile_names = config::profile_names(&profiles);
 
-        if profile_names.is_empty() {
-            eprintln!("No SSO profiles found in ~/.aws/config");
-            return Ok(());
-        }
-
-        // 2. skim でプロファイル選択
-        let Some(selected_profile) = select_profile(&profile_names) else {
-            return Ok(());
-        };
-
-        // 3. SSO トークンチェック + login
-        if let Some(profile) = profiles.iter().find(|p| p.name == selected_profile) {
+        // SSO トークンチェック + login（同期的に実行）
+        if let Some(profile) = profiles.iter().find(|p| p.name == profile_name) {
             match sso::check_sso_token(profile) {
                 SsoTokenStatus::Valid => {}
                 SsoTokenStatus::Expired | SsoTokenStatus::NotFound => {
                     let status = std::process::Command::new("aws")
-                        .args(["sso", "login", "--profile", &selected_profile])
+                        .args(["sso", "login", "--profile", &profile_name])
                         .stdin(std::process::Stdio::inherit())
                         .stdout(std::process::Stdio::inherit())
                         .stderr(std::process::Stdio::inherit())
@@ -112,12 +96,16 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        let region = config::get_region_for_profile(&profiles, &selected_profile);
-        (selected_profile, region)
+        App::with_delete_permissions(profile_name, region, delete_permissions)
+    } else {
+        // プロファイル選択画面から開始
+        let profiles = config::load_sso_profiles()?;
+        if profiles.is_empty() {
+            eprintln!("No SSO profiles found in ~/.aws/config");
+            return Ok(());
+        }
+        App::new_with_profile_selector(profiles, delete_permissions)
     };
-
-    // 4. リージョン取得 + App初期化
-    let mut app = App::with_delete_permissions(selected_profile, region, delete_permissions);
 
     // 5. ターミナル初期化
     crossterm::terminal::enable_raw_mode()?;
@@ -132,6 +120,8 @@ async fn main() -> anyhow::Result<()> {
     let mut clients = Clients::new();
     let mut spinner_tick: usize = 0;
     let mut log_poll_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mut sso_login_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mut sso_cancel_tx: Option<tokio::sync::oneshot::Sender<()>> = None;
 
     loop {
         tokio::select! {
@@ -172,7 +162,23 @@ async fn main() -> anyhow::Result<()> {
                     let action_clone = action.clone();
                     let side_effect = app.dispatch(action);
 
-                    handle_side_effects(&mut app, &mut clients, side_effect, &prev_view, prev_tab_id, &action_clone).await;
+                    // SSO loginプロセス起動
+                    if let SideEffect::StartSsoLogin { profile_name, region } = &side_effect {
+                        let (handle, cancel) = start_sso_login(
+                            app.event_tx.clone(),
+                            profile_name.clone(),
+                            region.clone(),
+                        );
+                        sso_login_handle = Some(handle);
+                        sso_cancel_tx = Some(cancel);
+                    } else {
+                        handle_side_effects(&mut app, &mut clients, side_effect, &prev_view, prev_tab_id, &action_clone).await;
+                    }
+
+                    // SSO loginキャンセル時のプロセス停止
+                    if action_clone == awsui::action::Action::CancelSsoLogin {
+                        cancel_sso_login(&mut sso_login_handle, &mut sso_cancel_tx);
+                    }
 
                     // ログポーリング管理
                     manage_log_polling(&app, &clients, &mut log_poll_handle);
@@ -180,7 +186,8 @@ async fn main() -> anyhow::Result<()> {
             }
             _ = render_interval.tick() => {
                 let is_loading = app.active_tab().map(|t| t.loading).unwrap_or(false);
-                if is_loading {
+                let is_sso_logging_in = app.profile_selector.as_ref().is_some_and(|ps| ps.logging_in);
+                if is_loading || is_sso_logging_in {
                     spinner_tick = spinner_tick.wrapping_add(1);
                 }
                 terminal.draw(|frame| render(frame, &app, spinner_tick))?;
@@ -203,30 +210,15 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// skim を使ってプロファイルを選択する
-fn select_profile(profile_names: &[String]) -> Option<String> {
-    let options = SkimOptionsBuilder::default()
-        .height("100%".to_string())
-        .prompt("AWS Profile> ".to_string())
-        .build()
-        .unwrap();
-
-    let input = profile_names.join("\n");
-    let item_reader = SkimItemReader::default();
-    let items = item_reader.of_bufread(Cursor::new(input));
-
-    let output = Skim::run_with(&options, Some(items))?;
-    if output.is_abort {
-        return None;
+fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
+    // プロファイル選択画面
+    if let Some(ps) = &app.profile_selector {
+        awsui::tui::views::profile_select::render(frame, ps, spinner_tick);
+        // グローバルオーバーレイ（メッセージダイアログなど）
+        render_global_overlays(frame, app);
+        return;
     }
 
-    output
-        .selected_items
-        .first()
-        .map(|item| item.output().to_string())
-}
-
-fn render(frame: &mut Frame, app: &App, spinner_tick: usize) {
     if app.show_dashboard {
         awsui::tui::views::dashboard::render(frame, app);
     } else if let Some(tab) = app.active_tab() {
@@ -739,6 +731,9 @@ async fn handle_side_effects(
         }
         SideEffect::DangerAction(danger_action) => {
             handle_danger_side_effect(app, clients, danger_action, tab_id);
+        }
+        SideEffect::StartSsoLogin { .. } => {
+            // メインループで直接処理済み
         }
         SideEffect::None => {}
     }
@@ -1717,4 +1712,101 @@ fn manage_log_polling(
             handle.abort();
         }
     }
+}
+
+/// SSO loginプロセスをキャンセルする
+fn cancel_sso_login(
+    sso_login_handle: &mut Option<tokio::task::JoinHandle<()>>,
+    sso_cancel_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    // キャンセル信号を送る（spawn内のselect!がchild.kill()を呼ぶ）
+    if let Some(tx) = sso_cancel_tx.take() {
+        let _ = tx.send(());
+    }
+    // JoinHandleはspawn内で自然終了するのでtakeするだけ
+    sso_login_handle.take();
+}
+
+/// SSO loginプロセスをバックグラウンドで起動する
+fn start_sso_login(
+    tx: mpsc::Sender<AppEvent>,
+    profile_name: String,
+    region: Option<String>,
+) -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+
+    let mut child = match tokio::process::Command::new("aws")
+        .args(["sso", "login", "--profile", &profile_name])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            let tx = tx.clone();
+            let handle = tokio::spawn(async move {
+                let _ = tx
+                    .send(AppEvent::SsoLoginCompleted(Err(
+                        awsui::error::AppError::Io(e),
+                    )))
+                    .await;
+            });
+            return (handle, cancel_tx);
+        }
+    };
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let handle = tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let tx_stdout = tx.clone();
+        let tx_stderr = tx.clone();
+
+        let stdout_task = tokio::spawn(async move {
+            if let Some(stdout) = stdout {
+                let mut reader = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let _ = tx_stdout.send(AppEvent::SsoLoginOutput(line)).await;
+                }
+            }
+        });
+
+        let stderr_task = tokio::spawn(async move {
+            if let Some(stderr) = stderr {
+                let mut reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let _ = tx_stderr.send(AppEvent::SsoLoginOutput(line)).await;
+                }
+            }
+        });
+
+        tokio::select! {
+            status = child.wait() => {
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+
+                let result = match status {
+                    Ok(s) if s.success() => Ok((profile_name, region)),
+                    Ok(s) => Err(awsui::error::AppError::AwsApi(format!(
+                        "aws sso login exited with status: {}",
+                        s
+                    ))),
+                    Err(e) => Err(awsui::error::AppError::Io(e)),
+                };
+                let _ = tx.send(AppEvent::SsoLoginCompleted(result)).await;
+            }
+            _ = cancel_rx => {
+                let _ = child.kill().await;
+                stdout_task.abort();
+                stderr_task.abort();
+            }
+        }
+    });
+
+    (handle, cancel_tx)
 }

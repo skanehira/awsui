@@ -1,0 +1,19 @@
+---
+source: src/tui/views/profile_select.rs
+expression: buffer_to_string(&terminal)
+---
+┌ Select Profile ────────────────────────────────────────────────────┐
+│Name                 Region             URL                         │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+ j/k:move  Enter:select  /:filter  q:quit
