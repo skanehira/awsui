@@ -260,6 +260,9 @@ pub enum SideEffect {
         profile_name: String,
         region: Option<String>,
     },
+    SsmConnect {
+        instance_id: String,
+    },
 }
 
 /// プロファイル選択画面の状態

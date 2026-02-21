@@ -225,6 +225,7 @@ fn handle_ec2_list_key(key: KeyEvent) -> Action {
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('y') => Action::CopyId,
         KeyCode::Char('D') => Action::Delete,
+        KeyCode::Char('s') => Action::SsmConnect,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
         _ => Action::Noop,
@@ -330,6 +331,7 @@ fn handle_ec2_detail_key(key: KeyEvent) -> Action {
         KeyCode::Char('S') => Action::StartStop,
         KeyCode::Char('R') => Action::Reboot,
         KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('s') => Action::SsmConnect,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
         _ => Action::Noop,
@@ -581,6 +583,7 @@ mod tests {
     #[case(key_char('R'), Action::Reboot)]
     #[case(key_char('r'), Action::Refresh)]
     #[case(key_char('y'), Action::CopyId)]
+    #[case(key_char('s'), Action::SsmConnect)]
     #[case(key_char('?'), Action::ShowHelp)]
     #[case(key(KeyCode::Esc), Action::Back)]
     #[case(key_char('q'), Action::Quit)]
@@ -669,6 +672,7 @@ mod tests {
     #[case(key_char('S'), Action::StartStop)]
     #[case(key_char('R'), Action::Reboot)]
     #[case(key_char('y'), Action::CopyId)]
+    #[case(key_char('s'), Action::SsmConnect)]
     #[case(key_char('?'), Action::ShowHelp)]
     #[case(key(KeyCode::Esc), Action::Back)]
     #[case(key_char('q'), Action::Quit)]

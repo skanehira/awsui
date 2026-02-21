@@ -26,4 +26,4 @@ expression: buffer_to_string(&terminal)
 ││                                                                            ││
 │└────────────────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────────────┘
- Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot y:copy-id Esc
+ Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot s:ssm-connect

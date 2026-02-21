@@ -721,6 +721,7 @@ impl App {
             | Action::ContainerSelectConfirm
             | Action::ContainerSelectCancel
             | Action::CancelSsoLogin => {}
+            Action::SsmConnect => return self.handle_ssm_connect(),
         }
         SideEffect::None
     }
@@ -1314,6 +1315,24 @@ impl App {
         {
             tab.mode = Mode::Confirm(action);
         }
+    }
+
+    fn handle_ssm_connect(&mut self) -> SideEffect {
+        let instance_data = self
+            .selected_instance()
+            .map(|i| (i.instance_id.clone(), i.state.clone()));
+        let Some((id, state)) = instance_data else {
+            return SideEffect::None;
+        };
+        if state != InstanceState::Running {
+            self.show_message(
+                MessageLevel::Error,
+                "SSM Connect",
+                "Instance must be in Running state to connect via SSM",
+            );
+            return SideEffect::None;
+        }
+        SideEffect::SsmConnect { instance_id: id }
     }
 
     fn handle_reboot(&mut self) {

@@ -16,4 +16,4 @@ expression: buffer_to_string(&terminal)
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- j/k:move Enter:detail S:start/stop R:reboot /:filter ?:help
+ j/k:move Enter:detail S:start/stop R:reboot s:ssm-connect /:filter ?:help

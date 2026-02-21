@@ -64,7 +64,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     // ステータスバー
     let keybinds = match detail_tab {
         DetailTab::Overview => {
-            "Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot y:copy-id Esc:back"
+            "Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot s:ssm-connect y:copy-id Esc:back"
         }
         DetailTab::Tags => "Tab:switch-tab y:copy-value Esc:back",
     };

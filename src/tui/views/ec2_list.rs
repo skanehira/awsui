@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, app: &App, spinner_tick: usize, area: Rect) {
         outer_chunks[1],
         mode,
         filter_value,
-        "j/k:move Enter:detail S:start/stop R:reboot /:filter ?:help",
+        "j/k:move Enter:detail S:start/stop R:reboot s:ssm-connect /:filter ?:help",
     );
 }
 

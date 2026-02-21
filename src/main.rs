@@ -171,6 +171,8 @@ async fn main() -> anyhow::Result<()> {
                         );
                         sso_login_handle = Some(handle);
                         sso_cancel_tx = Some(cancel);
+                    } else if let SideEffect::SsmConnect { instance_id } = &side_effect {
+                        run_ssm_connect(&mut terminal, instance_id, &mut app);
                     } else {
                         handle_side_effects(&mut app, &mut clients, side_effect, &prev_view, prev_tab_id, &action_clone).await;
                     }
@@ -733,6 +735,9 @@ async fn handle_side_effects(
             handle_danger_side_effect(app, clients, danger_action, tab_id);
         }
         SideEffect::StartSsoLogin { .. } => {
+            // メインループで直接処理済み
+        }
+        SideEffect::SsmConnect { .. } => {
             // メインループで直接処理済み
         }
         SideEffect::None => {}
@@ -1711,6 +1716,68 @@ fn manage_log_polling(
         if let Some(handle) = log_poll_handle.take() {
             handle.abort();
         }
+    }
+}
+
+/// SSM Session Manager でEC2インスタンスに接続する
+/// TUIを一時停止し、aws ssm start-sessionを対話的に実行、終了後にTUIを復帰する
+fn run_ssm_connect(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    instance_id: &str,
+    app: &mut App,
+) {
+    let Some(profile) = &app.profile else {
+        return;
+    };
+    let profile = profile.clone();
+
+    // ターミナル復元
+    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::LeaveAlternateScreen
+    );
+
+    // aws ssm start-session を対話的に実行
+    let status = std::process::Command::new("aws")
+        .args([
+            "ssm",
+            "start-session",
+            "--target",
+            instance_id,
+            "--profile",
+            &profile,
+        ])
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+
+    // ターミナル再初期化
+    let _ = crossterm::terminal::enable_raw_mode();
+    let _ = crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::EnterAlternateScreen
+    );
+    let _ = terminal.clear();
+
+    // コマンド失敗時はTUI復帰後にエラーメッセージ表示
+    match status {
+        Err(e) => {
+            app.show_message(
+                awsui::app::MessageLevel::Error,
+                "SSM Connect Failed",
+                format!("Failed to start SSM session: {}", e),
+            );
+        }
+        Ok(s) if !s.success() => {
+            app.show_message(
+                awsui::app::MessageLevel::Error,
+                "SSM Connect Failed",
+                format!("SSM session exited with code: {}", s.code().unwrap_or(-1)),
+            );
+        }
+        _ => {}
     }
 }
 

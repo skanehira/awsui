@@ -1342,6 +1342,51 @@ fn handle_event_sso_login_completed_err_resets_state_and_shows_error() {
     assert_eq!(msg.body, "AWS API error: login failed");
 }
 
+// ──────────────────────────────────────────────
+// SsmConnect テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn dispatch_ssm_connect_returns_ssm_connect_when_instance_running() {
+    let mut app = app_with_ec2_tab();
+    set_ec2_instances(
+        &mut app,
+        vec![create_test_instance("i-001", "web", InstanceState::Running)],
+    );
+    let side_effect = app.dispatch(Action::SsmConnect);
+    assert_eq!(
+        side_effect,
+        SideEffect::SsmConnect {
+            instance_id: "i-001".to_string(),
+        }
+    );
+}
+
+#[test]
+fn dispatch_ssm_connect_returns_none_and_shows_error_when_instance_stopped() {
+    let mut app = app_with_ec2_tab();
+    set_ec2_instances(
+        &mut app,
+        vec![create_test_instance("i-001", "web", InstanceState::Stopped)],
+    );
+    let side_effect = app.dispatch(Action::SsmConnect);
+    assert_eq!(side_effect, SideEffect::None);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+#[test]
+fn dispatch_ssm_connect_returns_none_when_no_instance_selected() {
+    let mut app = app_with_ec2_tab();
+    let side_effect = app.dispatch(Action::SsmConnect);
+    assert_eq!(side_effect, SideEffect::None);
+}
+
+// ──────────────────────────────────────────────
+// ProfileSelector テスト
+// ──────────────────────────────────────────────
+
 #[test]
 fn dispatch_enter_on_profile_selector_returns_start_sso_login_when_token_not_found() {
     let mut app = app_with_profile_selector();

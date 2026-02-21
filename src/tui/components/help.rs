@@ -23,6 +23,7 @@ impl HelpPopup {
             (ServiceKind::Ec2, TabView::List) => vec![
                 Line::from("    S          Start/Stop instance"),
                 Line::from("    R          Reboot instance"),
+                Line::from("    s          SSM Connect"),
                 Line::from("    D          Terminate instance"),
                 Line::from("    r          Refresh list"),
                 Line::from("    y          Copy ID"),
@@ -31,6 +32,7 @@ impl HelpPopup {
             (ServiceKind::Ec2, TabView::Detail) => vec![
                 Line::from("    S          Start/Stop instance"),
                 Line::from("    R          Reboot instance"),
+                Line::from("    s          SSM Connect"),
                 Line::from("    y          Copy ID"),
                 Line::from("    ]          Switch tab"),
                 Line::from("    Enter      Follow link"),
@@ -162,24 +164,26 @@ mod tests {
         assert!(content.contains("Press Esc to close"));
     }
 
-    // EC2 List: S(Start/Stop), R(Reboot), D(Terminate), r, y, /
+    // EC2 List: S(Start/Stop), R(Reboot), s(SSM Connect), D(Terminate), r, y, /
     #[test]
     fn help_popup_render_returns_ec2_actions_when_ec2_list() {
         let content = render_help((ServiceKind::Ec2, TabView::List));
         assert!(content.contains("Start/Stop"));
         assert!(content.contains("Reboot"));
+        assert!(content.contains("SSM Connect"));
         assert!(content.contains("Terminate"));
         assert!(content.contains("Refresh"));
         assert!(content.contains("Copy"));
         assert!(content.contains("Filter"));
     }
 
-    // EC2 Detail: S(Start/Stop), R(Reboot), y, ](Switch tab), Enter(follow-link)
+    // EC2 Detail: S(Start/Stop), R(Reboot), s(SSM Connect), y, ](Switch tab), Enter(follow-link)
     #[test]
     fn help_popup_render_returns_ec2_detail_actions_when_ec2_detail() {
         let content = render_help((ServiceKind::Ec2, TabView::Detail));
         assert!(content.contains("Start/Stop"));
         assert!(content.contains("Reboot"));
+        assert!(content.contains("SSM Connect"));
         assert!(content.contains("Copy"));
         assert!(content.contains("]"));
         assert!(content.contains("Follow link"));
