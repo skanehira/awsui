@@ -186,6 +186,7 @@ mod tests {
             created_at: Some("2026-02-04T20:07:00Z".to_string()),
             health_check_grace_period_seconds: Some(0),
             deployment_status: Some("COMPLETED".to_string()),
+            enable_execute_command: true,
         }
     }
 

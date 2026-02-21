@@ -173,6 +173,8 @@ async fn main() -> anyhow::Result<()> {
                         sso_cancel_tx = Some(cancel);
                     } else if let SideEffect::SsmConnect { instance_id } = &side_effect {
                         run_ssm_connect(&mut terminal, instance_id, &mut app);
+                    } else if let SideEffect::EcsExec { cluster_arn, task_arn, container_name } = &side_effect {
+                        run_ecs_exec(&mut terminal, cluster_arn, task_arn, container_name, &mut app);
                     } else {
                         handle_side_effects(&mut app, &mut clients, side_effect, &prev_view, prev_tab_id, &action_clone).await;
                     }
@@ -501,7 +503,9 @@ fn render_tab_overlays(frame: &mut Frame, tab: &awsui::tab::Tab) {
             let dialog = DangerConfirmDialog::new(ctx);
             frame.render_widget(dialog, frame.area());
         }
-        Mode::ContainerSelect { names, selected } => {
+        Mode::ContainerSelect {
+            names, selected, ..
+        } => {
             let popup = awsui::tui::components::dialog::centered_rect(
                 50,
                 (names.len() as u16 + 5).min(20),
@@ -738,6 +742,9 @@ async fn handle_side_effects(
             // メインループで直接処理済み
         }
         SideEffect::SsmConnect { .. } => {
+            // メインループで直接処理済み
+        }
+        SideEffect::EcsExec { .. } => {
             // メインループで直接処理済み
         }
         SideEffect::None => {}
@@ -1775,6 +1782,77 @@ fn run_ssm_connect(
                 awsui::app::MessageLevel::Error,
                 "SSM Connect Failed",
                 format!("SSM session exited with code: {}", s.code().unwrap_or(-1)),
+            );
+        }
+        _ => {}
+    }
+}
+
+/// ECS Execute Command でコンテナにアタッチする
+/// TUIを一時停止し、aws ecs execute-commandを対話的に実行、終了後にTUIを復帰する
+fn run_ecs_exec(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    cluster_arn: &str,
+    task_arn: &str,
+    container_name: &str,
+    app: &mut App,
+) {
+    let Some(profile) = &app.profile else {
+        return;
+    };
+    let profile = profile.clone();
+
+    // ターミナル復元
+    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::LeaveAlternateScreen
+    );
+
+    // aws ecs execute-command を対話的に実行
+    let status = std::process::Command::new("aws")
+        .args([
+            "ecs",
+            "execute-command",
+            "--cluster",
+            cluster_arn,
+            "--task",
+            task_arn,
+            "--container",
+            container_name,
+            "--command",
+            "/bin/sh",
+            "--interactive",
+            "--profile",
+            &profile,
+        ])
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+
+    // ターミナル再初期化
+    let _ = crossterm::terminal::enable_raw_mode();
+    let _ = crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::EnterAlternateScreen
+    );
+    let _ = terminal.clear();
+
+    // コマンド失敗時はTUI復帰後にエラーメッセージ表示
+    match status {
+        Err(e) => {
+            app.show_message(
+                awsui::app::MessageLevel::Error,
+                "ECS Exec Failed",
+                format!("Failed to start ECS Exec session: {}", e),
+            );
+        }
+        Ok(s) if !s.success() => {
+            app.show_message(
+                awsui::app::MessageLevel::Error,
+                "ECS Exec Failed",
+                format!("ECS Exec exited with code: {}", s.code().unwrap_or(-1)),
             );
         }
         _ => {}

@@ -523,71 +523,24 @@ impl App {
                     }
                     _ => return SideEffect::None,
                 },
-                Mode::ContainerSelect { names, selected } => match action {
+                Mode::ContainerSelect {
+                    names,
+                    selected,
+                    purpose,
+                } => match action {
                     Action::ContainerSelectConfirm => {
                         let name = names.get(*selected).cloned();
+                        let purpose = purpose.clone();
                         if let Some(tab) = self.active_tab_mut() {
                             tab.mode = Mode::Normal;
                         }
                         if let Some(container_name) = name {
-                            // pending_log_configsから選択されたコンテナのconfigを見つけてlog_stateを作成
-                            if let Some((_config_tab_id, configs)) = self.pending_log_configs.take()
-                                && let Some(config) =
-                                    configs.iter().find(|c| c.container_name == container_name)
-                            {
-                                let log_group = config.log_group.clone().unwrap_or_default();
-                                let tab_id = self.active_tab().map(|t| t.id);
-                                let task_id = self.active_tab().and_then(|tab| {
-                                    if let crate::tab::ServiceData::Ecs {
-                                        tasks, nav_level, ..
-                                    } = &tab.data
-                                    {
-                                        nav_level
-                                            .as_ref()
-                                            .and_then(|nl| nl.task_index())
-                                            .and_then(|idx| tasks.get(idx))
-                                            .map(|t| {
-                                                t.task_arn
-                                                    .rsplit('/')
-                                                    .next()
-                                                    .unwrap_or(&t.task_arn)
-                                                    .to_string()
-                                            })
-                                    } else {
-                                        None
-                                    }
-                                });
-                                if let (Some(_tab_id), Some(task_id)) = (tab_id, task_id) {
-                                    let stream_prefix =
-                                        config.stream_prefix.as_deref().unwrap_or_default();
-                                    let log_stream =
-                                        format!("{}/{}/{}", stream_prefix, container_name, task_id);
-                                    if let Some(tab) = self.active_tab_mut()
-                                        && let crate::tab::ServiceData::Ecs { nav_level, .. } =
-                                            &mut tab.data
-                                    {
-                                        if let Some(nl) = nav_level.as_mut() {
-                                            let service_index = nl.service_index().unwrap_or(0);
-                                            let task_index = nl.task_index().unwrap_or(0);
-                                            *nav_level = Some(crate::tab::EcsNavLevel::LogView {
-                                                service_index,
-                                                task_index,
-                                                log_state: Box::new(crate::tab::LogViewState {
-                                                    container_name,
-                                                    log_group,
-                                                    log_stream,
-                                                    events: Vec::new(),
-                                                    next_forward_token: None,
-                                                    auto_scroll: true,
-                                                    scroll_offset: 0,
-                                                    search_query: String::new(),
-                                                    search_matches: Vec::new(),
-                                                    current_match_index: None,
-                                                }),
-                                            });
-                                        }
-                                        tab.loading = true;
-                                    }
+                            match purpose {
+                                ContainerSelectPurpose::EcsExec => {
+                                    return self.handle_container_select_ecs_exec(&container_name);
+                                }
+                                ContainerSelectPurpose::ShowLogs => {
+                                    self.handle_container_select_show_logs(container_name);
                                 }
                             }
                         }
@@ -609,7 +562,9 @@ impl App {
                     }
                     Action::ContainerSelectDown => {
                         if let Some(tab) = self.active_tab_mut()
-                            && let Mode::ContainerSelect { names, selected } = &mut tab.mode
+                            && let Mode::ContainerSelect {
+                                names, selected, ..
+                            } = &mut tab.mode
                         {
                             let max = names.len().saturating_sub(1);
                             if *selected < max {
@@ -722,6 +677,7 @@ impl App {
             | Action::ContainerSelectCancel
             | Action::CancelSsoLogin => {}
             Action::SsmConnect => return self.handle_ssm_connect(),
+            Action::EcsExec => return self.handle_ecs_exec(),
         }
         SideEffect::None
     }
@@ -1099,7 +1055,11 @@ impl App {
                         let names: Vec<String> =
                             configs.iter().map(|c| c.container_name.clone()).collect();
                         if let Some(tab) = self.find_tab_mut(tab_id) {
-                            tab.mode = Mode::ContainerSelect { names, selected: 0 };
+                            tab.mode = Mode::ContainerSelect {
+                                names,
+                                selected: 0,
+                                purpose: ContainerSelectPurpose::ShowLogs,
+                            };
                         }
                         // configs を一時保存（後でContainerSelectConfirmで使用）
                         // ContainerSelectConfirm時にmain.rsで再度describe_task_definition_log_configsを
@@ -1333,6 +1293,170 @@ impl App {
             return SideEffect::None;
         }
         SideEffect::SsmConnect { instance_id: id }
+    }
+
+    fn handle_container_select_ecs_exec(&mut self, container_name: &str) -> SideEffect {
+        let Some(tab) = self.active_tab() else {
+            return SideEffect::None;
+        };
+        let crate::tab::ServiceData::Ecs {
+            tasks, nav_level, ..
+        } = &tab.data
+        else {
+            return SideEffect::None;
+        };
+        let task_index = nav_level.as_ref().and_then(|nl| nl.task_index());
+        let Some(task) = task_index.and_then(|idx| tasks.get(idx)) else {
+            return SideEffect::None;
+        };
+        SideEffect::EcsExec {
+            cluster_arn: task.cluster_arn.clone(),
+            task_arn: task.task_arn.clone(),
+            container_name: container_name.to_string(),
+        }
+    }
+
+    fn handle_container_select_show_logs(&mut self, container_name: String) {
+        // pending_log_configsから選択されたコンテナのconfigを見つけてlog_stateを作成
+        if let Some((_config_tab_id, configs)) = self.pending_log_configs.take()
+            && let Some(config) = configs.iter().find(|c| c.container_name == container_name)
+        {
+            let log_group = config.log_group.clone().unwrap_or_default();
+            let tab_id = self.active_tab().map(|t| t.id);
+            let task_id = self.active_tab().and_then(|tab| {
+                if let crate::tab::ServiceData::Ecs {
+                    tasks, nav_level, ..
+                } = &tab.data
+                {
+                    nav_level
+                        .as_ref()
+                        .and_then(|nl| nl.task_index())
+                        .and_then(|idx| tasks.get(idx))
+                        .map(|t| {
+                            t.task_arn
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(&t.task_arn)
+                                .to_string()
+                        })
+                } else {
+                    None
+                }
+            });
+            if let (Some(_tab_id), Some(task_id)) = (tab_id, task_id) {
+                let stream_prefix = config.stream_prefix.as_deref().unwrap_or_default();
+                let log_stream = format!("{}/{}/{}", stream_prefix, container_name, task_id);
+                if let Some(tab) = self.active_tab_mut()
+                    && let crate::tab::ServiceData::Ecs { nav_level, .. } = &mut tab.data
+                {
+                    if let Some(nl) = nav_level.as_mut() {
+                        let service_index = nl.service_index().unwrap_or(0);
+                        let task_index = nl.task_index().unwrap_or(0);
+                        *nav_level = Some(crate::tab::EcsNavLevel::LogView {
+                            service_index,
+                            task_index,
+                            log_state: Box::new(crate::tab::LogViewState {
+                                container_name,
+                                log_group,
+                                log_stream,
+                                events: Vec::new(),
+                                next_forward_token: None,
+                                auto_scroll: true,
+                                scroll_offset: 0,
+                                search_query: String::new(),
+                                search_matches: Vec::new(),
+                                current_match_index: None,
+                            }),
+                        });
+                    }
+                    tab.loading = true;
+                }
+            }
+        }
+    }
+
+    fn handle_ecs_exec(&mut self) -> SideEffect {
+        let Some(tab) = self.active_tab() else {
+            return SideEffect::None;
+        };
+        let crate::tab::ServiceData::Ecs {
+            services,
+            tasks,
+            nav_level,
+            ..
+        } = &tab.data
+        else {
+            return SideEffect::None;
+        };
+
+        // ServiceDetail（タスク一覧）またはTaskDetail（タスク詳細）で動作
+        let (service_index, task_index) = match nav_level {
+            Some(crate::tab::EcsNavLevel::TaskDetail {
+                service_index,
+                task_index,
+            }) => (*service_index, *task_index),
+            Some(crate::tab::EcsNavLevel::ServiceDetail { service_index }) => {
+                (*service_index, tab.detail_tag_index)
+            }
+            _ => return SideEffect::None,
+        };
+
+        // enable_execute_command チェック
+        let Some(service) = services.get(service_index) else {
+            return SideEffect::None;
+        };
+        if !service.enable_execute_command {
+            self.show_message(
+                MessageLevel::Error,
+                "ECS Exec",
+                "ExecuteCommand is not enabled on this service",
+            );
+            return SideEffect::None;
+        }
+
+        // タスク取得
+        let Some(task) = tasks.get(task_index) else {
+            return SideEffect::None;
+        };
+
+        // RUNNINGコンテナのフィルタリング
+        let running_containers: Vec<&crate::aws::ecs_model::Container> = task
+            .containers
+            .iter()
+            .filter(|c| c.last_status == "RUNNING")
+            .collect();
+
+        if running_containers.is_empty() {
+            self.show_message(
+                MessageLevel::Error,
+                "ECS Exec",
+                "No running containers found in this task",
+            );
+            return SideEffect::None;
+        }
+
+        let cluster_arn = task.cluster_arn.clone();
+        let task_arn = task.task_arn.clone();
+
+        if running_containers.len() == 1 {
+            // コンテナが1つ → 直接実行
+            return SideEffect::EcsExec {
+                cluster_arn,
+                task_arn,
+                container_name: running_containers[0].name.clone(),
+            };
+        }
+
+        // 複数コンテナ → 選択ダイアログ
+        let names: Vec<String> = running_containers.iter().map(|c| c.name.clone()).collect();
+        if let Some(tab) = self.active_tab_mut() {
+            tab.mode = Mode::ContainerSelect {
+                names,
+                selected: 0,
+                purpose: ContainerSelectPurpose::EcsExec,
+            };
+        }
+        SideEffect::None
     }
 
     fn handle_reboot(&mut self) {

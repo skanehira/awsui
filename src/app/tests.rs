@@ -1384,6 +1384,301 @@ fn dispatch_ssm_connect_returns_none_when_no_instance_selected() {
 }
 
 // ──────────────────────────────────────────────
+// ECS Exec テスト
+// ──────────────────────────────────────────────
+
+fn create_test_container(name: &str, status: &str) -> crate::aws::ecs_model::Container {
+    crate::aws::ecs_model::Container {
+        name: name.to_string(),
+        image: format!("123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/{name}:latest"),
+        last_status: status.to_string(),
+        exit_code: None,
+        health_status: None,
+        reason: None,
+    }
+}
+
+fn create_test_task(
+    task_id: &str,
+    cluster_arn: &str,
+    containers: Vec<crate::aws::ecs_model::Container>,
+) -> crate::aws::ecs_model::Task {
+    crate::aws::ecs_model::Task {
+        task_arn: format!("arn:aws:ecs:ap-northeast-1:123456789012:task/production/{task_id}"),
+        cluster_arn: cluster_arn.to_string(),
+        task_definition_arn: "arn:aws:ecs:ap-northeast-1:123456789012:task-definition/web:10"
+            .to_string(),
+        last_status: "RUNNING".to_string(),
+        desired_status: "RUNNING".to_string(),
+        cpu: Some("256".to_string()),
+        memory: Some("512".to_string()),
+        launch_type: Some("FARGATE".to_string()),
+        platform_version: Some("1.4.0".to_string()),
+        health_status: None,
+        connectivity: None,
+        availability_zone: None,
+        started_at: None,
+        stopped_at: None,
+        stopped_reason: None,
+        containers,
+    }
+}
+
+fn create_test_ecs_service(enable_exec: bool) -> crate::aws::ecs_model::Service {
+    crate::aws::ecs_model::Service {
+        service_name: "web-service".to_string(),
+        service_arn: "arn:aws:ecs:ap-northeast-1:123456789012:service/production/web-service"
+            .to_string(),
+        cluster_arn: "arn:aws:ecs:ap-northeast-1:123456789012:cluster/production".to_string(),
+        status: "ACTIVE".to_string(),
+        desired_count: 1,
+        running_count: 1,
+        pending_count: 0,
+        task_definition: "arn:aws:ecs:ap-northeast-1:123456789012:task-definition/web:10"
+            .to_string(),
+        launch_type: Some("FARGATE".to_string()),
+        scheduling_strategy: Some("REPLICA".to_string()),
+        created_at: None,
+        health_check_grace_period_seconds: None,
+        deployment_status: None,
+        enable_execute_command: enable_exec,
+    }
+}
+
+/// ECSタブを作成し、nav_levelをTaskDetailに設定したAppを返す
+fn app_with_ecs_task_detail(
+    service: crate::aws::ecs_model::Service,
+    tasks: Vec<crate::aws::ecs_model::Task>,
+) -> App {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::Ecs);
+    let tab = app.active_tab_mut().unwrap();
+    if let ServiceData::Ecs {
+        services: svcs,
+        tasks: t,
+        nav_level,
+        ..
+    } = &mut tab.data
+    {
+        *svcs = vec![service];
+        *t = tasks;
+        *nav_level = Some(crate::tab::EcsNavLevel::TaskDetail {
+            service_index: 0,
+            task_index: 0,
+        });
+    }
+    tab.loading = false;
+    app
+}
+
+#[test]
+fn dispatch_ecs_exec_returns_none_when_not_task_detail() {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::Ecs);
+    // nav_level is None (ClusterList)
+    let side_effect = app.dispatch(Action::EcsExec);
+    assert_eq!(side_effect, SideEffect::None);
+}
+
+#[test]
+fn dispatch_ecs_exec_shows_error_when_exec_command_disabled() {
+    let service = create_test_ecs_service(false);
+    let tasks = vec![create_test_task(
+        "abc123",
+        &service.cluster_arn,
+        vec![create_test_container("web", "RUNNING")],
+    )];
+    let mut app = app_with_ecs_task_detail(service, tasks);
+
+    let side_effect = app.dispatch(Action::EcsExec);
+
+    assert_eq!(side_effect, SideEffect::None);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+#[test]
+fn dispatch_ecs_exec_shows_error_when_no_running_containers() {
+    let service = create_test_ecs_service(true);
+    let tasks = vec![create_test_task(
+        "abc123",
+        &service.cluster_arn,
+        vec![create_test_container("web", "STOPPED")],
+    )];
+    let mut app = app_with_ecs_task_detail(service, tasks);
+
+    let side_effect = app.dispatch(Action::EcsExec);
+
+    assert_eq!(side_effect, SideEffect::None);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+#[test]
+fn dispatch_ecs_exec_returns_ecs_exec_when_single_running_container() {
+    let cluster_arn = "arn:aws:ecs:ap-northeast-1:123456789012:cluster/production";
+    let service = create_test_ecs_service(true);
+    let tasks = vec![create_test_task(
+        "abc123",
+        cluster_arn,
+        vec![create_test_container("web", "RUNNING")],
+    )];
+    let mut app = app_with_ecs_task_detail(service, tasks);
+
+    let side_effect = app.dispatch(Action::EcsExec);
+
+    assert_eq!(
+        side_effect,
+        SideEffect::EcsExec {
+            cluster_arn: cluster_arn.to_string(),
+            task_arn: "arn:aws:ecs:ap-northeast-1:123456789012:task/production/abc123".to_string(),
+            container_name: "web".to_string(),
+        }
+    );
+}
+
+#[test]
+fn dispatch_ecs_exec_shows_container_select_when_multiple_running_containers() {
+    let service = create_test_ecs_service(true);
+    let tasks = vec![create_test_task(
+        "abc123",
+        &service.cluster_arn,
+        vec![
+            create_test_container("web", "RUNNING"),
+            create_test_container("sidecar", "RUNNING"),
+            create_test_container("stopped-one", "STOPPED"),
+        ],
+    )];
+    let mut app = app_with_ecs_task_detail(service, tasks);
+
+    let side_effect = app.dispatch(Action::EcsExec);
+
+    assert_eq!(side_effect, SideEffect::None);
+    let tab = app.active_tab().unwrap();
+    assert_eq!(
+        tab.mode,
+        Mode::ContainerSelect {
+            names: vec!["web".to_string(), "sidecar".to_string()],
+            selected: 0,
+            purpose: ContainerSelectPurpose::EcsExec,
+        }
+    );
+}
+
+#[test]
+fn dispatch_container_select_confirm_returns_ecs_exec_when_purpose_is_ecs_exec() {
+    let cluster_arn = "arn:aws:ecs:ap-northeast-1:123456789012:cluster/production";
+    let service = create_test_ecs_service(true);
+    let tasks = vec![create_test_task(
+        "abc123",
+        cluster_arn,
+        vec![
+            create_test_container("web", "RUNNING"),
+            create_test_container("sidecar", "RUNNING"),
+        ],
+    )];
+    let mut app = app_with_ecs_task_detail(service, tasks);
+
+    // ContainerSelectモードを設定（sidecarを選択）
+    let tab = app.active_tab_mut().unwrap();
+    tab.mode = Mode::ContainerSelect {
+        names: vec!["web".to_string(), "sidecar".to_string()],
+        selected: 1,
+        purpose: ContainerSelectPurpose::EcsExec,
+    };
+
+    let side_effect = app.dispatch(Action::ContainerSelectConfirm);
+
+    assert_eq!(
+        side_effect,
+        SideEffect::EcsExec {
+            cluster_arn: cluster_arn.to_string(),
+            task_arn: "arn:aws:ecs:ap-northeast-1:123456789012:task/production/abc123".to_string(),
+            container_name: "sidecar".to_string(),
+        }
+    );
+    // モードはNormalに戻る
+    let tab = app.active_tab().unwrap();
+    assert_eq!(tab.mode, Mode::Normal);
+}
+
+fn app_with_ecs_service_detail(
+    service: crate::aws::ecs_model::Service,
+    tasks: Vec<crate::aws::ecs_model::Task>,
+) -> App {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::Ecs);
+    let tab = app.active_tab_mut().unwrap();
+    if let ServiceData::Ecs {
+        services: svcs,
+        tasks: t,
+        nav_level,
+        ..
+    } = &mut tab.data
+    {
+        *svcs = vec![service];
+        *t = tasks;
+        *nav_level = Some(crate::tab::EcsNavLevel::ServiceDetail { service_index: 0 });
+    }
+    tab.loading = false;
+    app
+}
+
+#[test]
+fn dispatch_ecs_exec_returns_ecs_exec_when_service_detail_single_container() {
+    let cluster_arn = "arn:aws:ecs:ap-northeast-1:123456789012:cluster/production";
+    let service = create_test_ecs_service(true);
+    let tasks = vec![create_test_task(
+        "abc123",
+        cluster_arn,
+        vec![create_test_container("web", "RUNNING")],
+    )];
+    let mut app = app_with_ecs_service_detail(service, tasks);
+    // detail_tag_index = 0 (最初のタスクを選択中)
+
+    let side_effect = app.dispatch(Action::EcsExec);
+
+    assert_eq!(
+        side_effect,
+        SideEffect::EcsExec {
+            cluster_arn: cluster_arn.to_string(),
+            task_arn: "arn:aws:ecs:ap-northeast-1:123456789012:task/production/abc123".to_string(),
+            container_name: "web".to_string(),
+        }
+    );
+}
+
+#[test]
+fn dispatch_ecs_exec_shows_container_select_when_service_detail_multiple_containers() {
+    let cluster_arn = "arn:aws:ecs:ap-northeast-1:123456789012:cluster/production";
+    let service = create_test_ecs_service(true);
+    let tasks = vec![create_test_task(
+        "abc123",
+        cluster_arn,
+        vec![
+            create_test_container("web", "RUNNING"),
+            create_test_container("sidecar", "RUNNING"),
+        ],
+    )];
+    let mut app = app_with_ecs_service_detail(service, tasks);
+
+    let side_effect = app.dispatch(Action::EcsExec);
+
+    assert_eq!(side_effect, SideEffect::None);
+    let tab = app.active_tab().unwrap();
+    assert!(matches!(
+        &tab.mode,
+        Mode::ContainerSelect {
+            names,
+            selected: 0,
+            purpose: ContainerSelectPurpose::EcsExec,
+        } if names == &vec!["web".to_string(), "sidecar".to_string()]
+    ));
+}
+
+// ──────────────────────────────────────────────
 // ProfileSelector テスト
 // ──────────────────────────────────────────────
 

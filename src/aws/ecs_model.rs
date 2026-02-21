@@ -26,6 +26,7 @@ pub struct Service {
     pub created_at: Option<String>,
     pub health_check_grace_period_seconds: Option<i32>,
     pub deployment_status: Option<String>,
+    pub enable_execute_command: bool,
 }
 
 /// ECSタスクのドメインモデル

@@ -53,11 +53,19 @@ pub enum Mode {
     Form(FormContext),
     /// 危険操作確認モード（リソース名入力での確認）
     DangerConfirm(DangerConfirmContext),
-    /// コンテナ選択モード（ログ表示用）
+    /// コンテナ選択モード（ログ表示・ECS Exec用）
     ContainerSelect {
         names: Vec<String>,
         selected: usize,
+        purpose: ContainerSelectPurpose,
     },
+}
+
+/// コンテナ選択の目的
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainerSelectPurpose {
+    ShowLogs,
+    EcsExec,
 }
 
 /// 確認ダイアログで実行するアクション
@@ -262,6 +270,11 @@ pub enum SideEffect {
     },
     SsmConnect {
         instance_id: String,
+    },
+    EcsExec {
+        cluster_arn: String,
+        task_arn: String,
+        container_name: String,
     },
 }
 

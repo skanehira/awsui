@@ -192,6 +192,7 @@ pub fn mock_services() -> Vec<Service> {
             created_at: Some("2024-01-15T00:00:00Z".to_string()),
             health_check_grace_period_seconds: Some(60),
             deployment_status: Some("PRIMARY".to_string()),
+            enable_execute_command: true,
         },
         Service {
             service_name: "api-service".to_string(),
@@ -209,6 +210,7 @@ pub fn mock_services() -> Vec<Service> {
             created_at: Some("2024-02-01T00:00:00Z".to_string()),
             health_check_grace_period_seconds: Some(30),
             deployment_status: Some("PRIMARY".to_string()),
+            enable_execute_command: true,
         },
     ]
 }

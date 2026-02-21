@@ -351,6 +351,7 @@ fn handle_ecs_detail_key(key: KeyEvent) -> Action {
         KeyCode::Char('G') => Action::MoveToBottom,
         KeyCode::Enter => Action::Enter,
         KeyCode::Char('l') => Action::ShowLogs,
+        KeyCode::Char('a') => Action::EcsExec,
         KeyCode::Char('y') => Action::CopyId,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
@@ -700,6 +701,7 @@ mod tests {
     #[case(key_char('y'), Action::CopyId)]
     #[case(key_char('?'), Action::ShowHelp)]
     #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('a'), Action::EcsExec)]
     #[case(key_char('q'), Action::Quit)]
     #[case(key_char('x'), Action::Noop)]
     fn handle_key_returns_expected_action_when_ecs_detail(

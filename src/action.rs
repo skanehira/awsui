@@ -68,6 +68,8 @@ pub enum Action {
     ContainerSelectCancel,
     /// SSM Session Manager で EC2 インスタンスに接続
     SsmConnect,
+    /// ECS Execute Command でコンテナにアタッチ
+    EcsExec,
     /// SSO loginダイアログでEsc押下時
     CancelSsoLogin,
     Noop,

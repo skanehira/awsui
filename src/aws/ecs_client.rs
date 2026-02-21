@@ -302,5 +302,6 @@ fn convert_service(sdk: &aws_sdk_ecs::types::Service) -> Service {
             .first()
             .and_then(|d| d.rollout_state())
             .map(|s| s.as_str().to_string()),
+        enable_execute_command: sdk.enable_execute_command(),
     }
 }
