@@ -16,16 +16,16 @@ aws-sdk-s3 = "1"
 aws-sdk-secretsmanager = "1"
 clap = { version = "4", features = ["derive"] }
 cli-clipboard = "0.4"
-crossterm = { version = "0.28", features = ["event-stream"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 nucleo = "0.5"
-ratatui = "0.29"
+ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1_smol = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-tui-input = { version = "0.14.0", features = ["crossterm"] }
+tui-input = { version = "0.15", features = ["crossterm"] }
 
 [features]
 mock-data = []

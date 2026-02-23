@@ -375,6 +375,7 @@ async fn create_client_and_load(app: &mut App, clients: &mut Clients, tab_id: Ta
 }
 
 /// クライアント生成エラー時の共通処理
+#[cfg(not(feature = "mock-data"))]
 fn handle_client_error(app: &mut App, tab_id: TabId, e: impl std::fmt::Display) {
     if let Some(t) = app.find_tab_mut(tab_id) {
         t.loading = false;
