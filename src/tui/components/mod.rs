@@ -1,3 +1,4 @@
+pub mod container_picker;
 pub mod dialog;
 pub mod form_dialog;
 pub mod help;

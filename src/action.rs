@@ -66,6 +66,7 @@ pub enum Action {
     ContainerSelectDown,
     ContainerSelectConfirm,
     ContainerSelectCancel,
+    ContainerSelectHandleInput(InputRequest),
     /// SSM Session Manager で EC2 インスタンスに接続
     SsmConnect,
     /// ECS Execute Command でコンテナにアタッチ

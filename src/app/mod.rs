@@ -523,14 +523,10 @@ impl App {
                     }
                     _ => return SideEffect::None,
                 },
-                Mode::ContainerSelect {
-                    names,
-                    selected,
-                    purpose,
-                } => match action {
+                Mode::ContainerSelect(state) => match action {
                     Action::ContainerSelectConfirm => {
-                        let name = names.get(*selected).cloned();
-                        let purpose = purpose.clone();
+                        let name = state.selected_name().map(|s| s.to_string());
+                        let purpose = state.purpose.clone();
                         if let Some(tab) = self.active_tab_mut() {
                             tab.mode = Mode::Normal;
                         }
@@ -554,22 +550,26 @@ impl App {
                     }
                     Action::ContainerSelectUp => {
                         if let Some(tab) = self.active_tab_mut()
-                            && let Mode::ContainerSelect { selected, .. } = &mut tab.mode
+                            && let Mode::ContainerSelect(state) = &mut tab.mode
                         {
-                            *selected = selected.saturating_sub(1);
+                            state.move_up();
                         }
                         return SideEffect::None;
                     }
                     Action::ContainerSelectDown => {
                         if let Some(tab) = self.active_tab_mut()
-                            && let Mode::ContainerSelect {
-                                names, selected, ..
-                            } = &mut tab.mode
+                            && let Mode::ContainerSelect(state) = &mut tab.mode
                         {
-                            let max = names.len().saturating_sub(1);
-                            if *selected < max {
-                                *selected += 1;
-                            }
+                            state.move_down();
+                        }
+                        return SideEffect::None;
+                    }
+                    Action::ContainerSelectHandleInput(req) => {
+                        if let Some(tab) = self.active_tab_mut()
+                            && let Mode::ContainerSelect(state) = &mut tab.mode
+                        {
+                            state.filter_input.handle(req);
+                            state.apply_filter();
                         }
                         return SideEffect::None;
                     }
@@ -675,6 +675,7 @@ impl App {
             | Action::ContainerSelectDown
             | Action::ContainerSelectConfirm
             | Action::ContainerSelectCancel
+            | Action::ContainerSelectHandleInput(_)
             | Action::CancelSsoLogin => {}
             Action::SsmConnect => return self.handle_ssm_connect(),
             Action::EcsExec => return self.handle_ecs_exec(),
@@ -1012,11 +1013,10 @@ impl App {
                         let names: Vec<String> =
                             configs.iter().map(|c| c.container_name.clone()).collect();
                         if let Some(tab) = self.find_tab_mut(tab_id) {
-                            tab.mode = Mode::ContainerSelect {
+                            tab.mode = Mode::ContainerSelect(ContainerSelectState::new(
                                 names,
-                                selected: 0,
-                                purpose: ContainerSelectPurpose::ShowLogs,
-                            };
+                                ContainerSelectPurpose::ShowLogs,
+                            ));
                         }
                         // configs を一時保存（後でContainerSelectConfirmで使用）
                         // ContainerSelectConfirm時にmain.rsで再度describe_task_definition_log_configsを
@@ -1418,11 +1418,10 @@ impl App {
         // 複数コンテナ → 選択ダイアログ
         let names: Vec<String> = running_containers.iter().map(|c| c.name.clone()).collect();
         if let Some(tab) = self.active_tab_mut() {
-            tab.mode = Mode::ContainerSelect {
+            tab.mode = Mode::ContainerSelect(ContainerSelectState::new(
                 names,
-                selected: 0,
-                purpose: ContainerSelectPurpose::EcsExec,
-            };
+                ContainerSelectPurpose::EcsExec,
+            ));
         }
         SideEffect::None
     }

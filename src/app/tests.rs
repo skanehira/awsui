@@ -1565,11 +1565,10 @@ fn dispatch_ecs_exec_shows_container_select_when_multiple_running_containers() {
     let tab = app.active_tab().unwrap();
     assert_eq!(
         tab.mode,
-        Mode::ContainerSelect {
-            names: vec!["web".to_string(), "sidecar".to_string()],
-            selected: 0,
-            purpose: ContainerSelectPurpose::EcsExec,
-        }
+        Mode::ContainerSelect(ContainerSelectState::new(
+            vec!["web".to_string(), "sidecar".to_string()],
+            ContainerSelectPurpose::EcsExec,
+        ))
     );
 }
 
@@ -1589,11 +1588,12 @@ fn dispatch_container_select_confirm_returns_ecs_exec_when_purpose_is_ecs_exec()
 
     // ContainerSelectモードを設定（sidecarを選択）
     let tab = app.active_tab_mut().unwrap();
-    tab.mode = Mode::ContainerSelect {
-        names: vec!["web".to_string(), "sidecar".to_string()],
-        selected: 1,
-        purpose: ContainerSelectPurpose::EcsExec,
-    };
+    let mut cs_state = ContainerSelectState::new(
+        vec!["web".to_string(), "sidecar".to_string()],
+        ContainerSelectPurpose::EcsExec,
+    );
+    cs_state.selected_index = 1;
+    tab.mode = Mode::ContainerSelect(cs_state);
 
     let side_effect = app.dispatch(Action::ContainerSelectConfirm);
 
@@ -1676,11 +1676,9 @@ fn dispatch_ecs_exec_shows_container_select_when_service_detail_multiple_contain
     let tab = app.active_tab().unwrap();
     assert!(matches!(
         &tab.mode,
-        Mode::ContainerSelect {
-            names,
-            selected: 0,
-            purpose: ContainerSelectPurpose::EcsExec,
-        } if names == &vec!["web".to_string(), "sidecar".to_string()]
+        Mode::ContainerSelect(state) if state.all_names == vec!["web".to_string(), "sidecar".to_string()]
+            && state.selected_index == 0
+            && state.purpose == ContainerSelectPurpose::EcsExec
     ));
 }
 
@@ -2646,11 +2644,10 @@ fn handle_tab_event_ecs_log_configs_loaded_shows_container_select_when_multiple_
     let tab = app.active_tab().unwrap();
     assert_eq!(
         tab.mode,
-        Mode::ContainerSelect {
-            names: vec!["web".to_string(), "sidecar".to_string()],
-            selected: 0,
-            purpose: ContainerSelectPurpose::ShowLogs,
-        }
+        Mode::ContainerSelect(ContainerSelectState::new(
+            vec!["web".to_string(), "sidecar".to_string()],
+            ContainerSelectPurpose::ShowLogs,
+        ))
     );
     // pending_log_configs に保存される
     assert!(app.pending_log_configs.is_some());
@@ -3030,11 +3027,10 @@ fn app_with_container_select(purpose: ContainerSelectPurpose) -> App {
     )];
     let mut app = app_with_ecs_task_detail(service, tasks);
     let tab = app.active_tab_mut().unwrap();
-    tab.mode = Mode::ContainerSelect {
-        names: vec!["web".to_string(), "sidecar".to_string()],
-        selected: 0,
+    tab.mode = Mode::ContainerSelect(ContainerSelectState::new(
+        vec!["web".to_string(), "sidecar".to_string()],
         purpose,
-    };
+    ));
     app
 }
 
@@ -3047,7 +3043,7 @@ fn dispatch_container_select_down_increments_selected_index() {
     let tab = app.active_tab().unwrap();
     assert!(matches!(
         &tab.mode,
-        Mode::ContainerSelect { selected: 1, .. }
+        Mode::ContainerSelect(state) if state.selected_index == 1
     ));
 }
 
@@ -3055,8 +3051,8 @@ fn dispatch_container_select_down_increments_selected_index() {
 fn dispatch_container_select_down_clamps_at_max() {
     let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
     let tab = app.active_tab_mut().unwrap();
-    if let Mode::ContainerSelect { selected, .. } = &mut tab.mode {
-        *selected = 1;
+    if let Mode::ContainerSelect(state) = &mut tab.mode {
+        state.selected_index = 1;
     }
 
     app.dispatch(Action::ContainerSelectDown);
@@ -3064,7 +3060,7 @@ fn dispatch_container_select_down_clamps_at_max() {
     let tab = app.active_tab().unwrap();
     assert!(matches!(
         &tab.mode,
-        Mode::ContainerSelect { selected: 1, .. }
+        Mode::ContainerSelect(state) if state.selected_index == 1
     ));
 }
 
@@ -3072,8 +3068,8 @@ fn dispatch_container_select_down_clamps_at_max() {
 fn dispatch_container_select_up_decrements_selected_index() {
     let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
     let tab = app.active_tab_mut().unwrap();
-    if let Mode::ContainerSelect { selected, .. } = &mut tab.mode {
-        *selected = 1;
+    if let Mode::ContainerSelect(state) = &mut tab.mode {
+        state.selected_index = 1;
     }
 
     app.dispatch(Action::ContainerSelectUp);
@@ -3081,7 +3077,7 @@ fn dispatch_container_select_up_decrements_selected_index() {
     let tab = app.active_tab().unwrap();
     assert!(matches!(
         &tab.mode,
-        Mode::ContainerSelect { selected: 0, .. }
+        Mode::ContainerSelect(state) if state.selected_index == 0
     ));
 }
 
@@ -3094,7 +3090,7 @@ fn dispatch_container_select_up_clamps_at_zero() {
     let tab = app.active_tab().unwrap();
     assert!(matches!(
         &tab.mode,
-        Mode::ContainerSelect { selected: 0, .. }
+        Mode::ContainerSelect(state) if state.selected_index == 0
     ));
 }
 
@@ -3148,4 +3144,22 @@ fn dispatch_container_select_confirm_enters_log_view_when_purpose_is_show_logs()
         panic!("Expected Ecs ServiceData");
     }
     assert!(app.pending_log_configs.is_none());
+}
+
+#[test]
+fn dispatch_container_select_handle_input_filters_names() {
+    let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
+
+    app.dispatch(Action::ContainerSelectHandleInput(
+        tui_input::InputRequest::InsertChar('w'),
+    ));
+
+    let tab = app.active_tab().unwrap();
+    if let Mode::ContainerSelect(state) = &tab.mode {
+        assert_eq!(state.filter_input.value(), "w");
+        assert_eq!(state.filtered_names, vec!["web".to_string()]);
+        assert_eq!(state.selected_index, 0);
+    } else {
+        panic!("Expected ContainerSelect mode");
+    }
 }

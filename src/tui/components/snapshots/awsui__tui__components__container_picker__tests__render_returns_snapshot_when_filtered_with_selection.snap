@@ -1,0 +1,14 @@
+---
+source: src/tui/components/container_picker.rs
+expression: buffer_to_string(&terminal)
+---
+                                                            
+                                                            
+                                                            
+                                                            
+               ┌ Select Container ──────────┐               
+               │/w                          │               
+               │Container                   │               
+               │web                         │               
+               │worker                      │               
+               └────────────────────────────┘

@@ -292,24 +292,9 @@ fn render_tab_overlays(frame: &mut Frame, tab: &awsui::tab::Tab) {
             let dialog = DangerConfirmDialog::new(ctx);
             frame.render_widget(dialog, frame.area());
         }
-        Mode::ContainerSelect {
-            names, selected, ..
-        } => {
-            let popup = awsui::tui::components::dialog::centered_rect(
-                50,
-                (names.len() as u16 + 5).min(20),
-                frame.area(),
-            );
-            frame.render_widget(ratatui::widgets::Clear, popup);
-            let block = ratatui::widgets::Block::default()
-                .title(" Select Container ")
-                .borders(ratatui::widgets::Borders::ALL)
-                .style(awsui::tui::theme::active());
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            let selector =
-                awsui::tui::components::list_selector::ListSelector::new("", names, *selected);
-            frame.render_widget(selector, inner);
+        Mode::ContainerSelect(state) => {
+            let widget = awsui::tui::components::container_picker::ContainerPicker::new(state);
+            frame.render_widget(widget, frame.area());
         }
         _ => {}
     }

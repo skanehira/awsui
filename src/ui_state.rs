@@ -54,11 +54,7 @@ pub enum Mode {
     /// 危険操作確認モード（リソース名入力での確認）
     DangerConfirm(DangerConfirmContext),
     /// コンテナ選択モード（ログ表示・ECS Exec用）
-    ContainerSelect {
-        names: Vec<String>,
-        selected: usize,
-        purpose: ContainerSelectPurpose,
-    },
+    ContainerSelect(ContainerSelectState),
 }
 
 /// コンテナ選択の目的
@@ -66,6 +62,65 @@ pub enum Mode {
 pub enum ContainerSelectPurpose {
     ShowLogs,
     EcsExec,
+}
+
+/// コンテナ選択ダイアログの状態
+#[derive(Debug, Clone)]
+pub struct ContainerSelectState {
+    pub all_names: Vec<String>,
+    pub filtered_names: Vec<String>,
+    pub selected_index: usize,
+    pub filter_input: Input,
+    pub purpose: ContainerSelectPurpose,
+}
+
+impl PartialEq for ContainerSelectState {
+    fn eq(&self, other: &Self) -> bool {
+        self.all_names == other.all_names
+            && self.filtered_names == other.filtered_names
+            && self.selected_index == other.selected_index
+            && self.filter_input.value() == other.filter_input.value()
+            && self.purpose == other.purpose
+    }
+}
+
+impl Eq for ContainerSelectState {}
+
+impl ContainerSelectState {
+    pub fn new(names: Vec<String>, purpose: ContainerSelectPurpose) -> Self {
+        let filtered_names = names.clone();
+        Self {
+            all_names: names,
+            filtered_names,
+            selected_index: 0,
+            filter_input: Input::default(),
+            purpose,
+        }
+    }
+
+    pub fn apply_filter(&mut self) {
+        self.filtered_names =
+            fuzzy_filter_items(&self.all_names, self.filter_input.value(), 0, |s| {
+                vec![s.as_str()]
+            });
+        self.selected_index = 0;
+    }
+
+    pub fn move_up(&mut self) {
+        self.selected_index = self.selected_index.saturating_sub(1);
+    }
+
+    pub fn move_down(&mut self) {
+        if !self.filtered_names.is_empty() {
+            self.selected_index = (self.selected_index + 1).min(self.filtered_names.len() - 1);
+        }
+    }
+
+    pub fn selected_name(&self) -> Option<&str> {
+        self.filtered_names
+            .get(self.selected_index)
+            .map(|s| s.as_str())
+    }
 }
 
 /// 確認ダイアログで実行するアクション

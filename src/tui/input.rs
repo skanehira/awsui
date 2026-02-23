@@ -339,14 +339,27 @@ fn handle_ecs_log_key(key: KeyEvent) -> Action {
     }
 }
 
-/// コンテナ選択ダイアログのキー処理
+/// コンテナ選択ダイアログのキー処理（常時フィルタ入力対応）
 fn handle_container_select_key(key: KeyEvent) -> Action {
+    // Ctrl+n / Ctrl+p で選択移動
+    if key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::ContainerSelectDown;
+    }
+    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::ContainerSelectUp;
+    }
     match key.code {
-        KeyCode::Char('j') | KeyCode::Down => Action::ContainerSelectDown,
-        KeyCode::Char('k') | KeyCode::Up => Action::ContainerSelectUp,
         KeyCode::Enter => Action::ContainerSelectConfirm,
         KeyCode::Esc => Action::ContainerSelectCancel,
-        _ => Action::Noop,
+        KeyCode::Down => Action::ContainerSelectDown,
+        KeyCode::Up => Action::ContainerSelectUp,
+        _ => {
+            if let Some(req) = to_input_request(&Event::Key(key)) {
+                Action::ContainerSelectHandleInput(req)
+            } else {
+                Action::Noop
+            }
+        }
     }
 }
 
