@@ -76,8 +76,8 @@ pub fn render(
 
 /// ログコンテンツを描画
 ///
-/// 全イベントを改行展開して Line に変換し、Paragraph::scroll() で
-/// 行番号ベースのスクロールを行う。メッセージ内の改行文字に対応。
+/// scroll_offset から表示領域に収まる分だけ Line を構築する。
+/// 全イベントを走査しないため、イベント数に依存しない O(visible) の描画コスト。
 fn render_log_content(frame: &mut Frame, log_state: &LogViewState, area: Rect) {
     if log_state.events.is_empty() {
         let empty = Paragraph::new("No log events").style(theme::header());
@@ -85,18 +85,20 @@ fn render_log_content(frame: &mut Frame, log_state: &LogViewState, area: Rect) {
         return;
     }
 
+    let visible_height = area.height as usize;
     let has_search = !log_state.search_query.is_empty();
     let current_match_event_idx = log_state
         .current_match_index
         .and_then(|mi| log_state.search_matches.get(mi).copied());
 
-    // 各イベントの開始行番号を記録しつつ、全 Line を構築
-    let mut event_start_lines: Vec<usize> = Vec::with_capacity(log_state.events.len());
-    let mut all_lines: Vec<Line> = Vec::new();
+    let mut visible_lines: Vec<Line> = Vec::with_capacity(visible_height);
 
-    for (event_idx, event) in log_state.events.iter().enumerate() {
-        event_start_lines.push(all_lines.len());
+    for event_idx in log_state.scroll_offset..log_state.events.len() {
+        if visible_lines.len() >= visible_height {
+            break;
+        }
 
+        let event = &log_state.events[event_idx];
         let is_match = has_search && log_state.search_matches.contains(&event_idx);
         let is_current = current_match_event_idx == Some(event_idx);
         let match_style = if is_current {
@@ -105,12 +107,14 @@ fn render_log_content(frame: &mut Frame, log_state: &LogViewState, area: Rect) {
             theme::search_match()
         };
 
-        let msg_lines: Vec<&str> = event.message.split('\n').collect();
-        for (line_idx, msg_line) in msg_lines.iter().enumerate() {
+        for (line_idx, msg_line) in event.message.split('\n').enumerate() {
+            if visible_lines.len() >= visible_height {
+                break;
+            }
+
             let time_part = if line_idx == 0 {
                 Span::styled(format!("{} ", event.formatted_time), theme::header())
             } else {
-                // 2行目以降はタイムスタンプ幅分のインデント
                 Span::raw(" ".repeat(event.formatted_time.len() + 1))
             };
 
@@ -118,21 +122,14 @@ fn render_log_content(frame: &mut Frame, log_state: &LogViewState, area: Rect) {
                 let msg_spans = highlight_matches(msg_line, &log_state.search_query, match_style);
                 let mut spans = vec![time_part];
                 spans.extend(msg_spans);
-                all_lines.push(Line::from(spans));
+                visible_lines.push(Line::from(spans));
             } else {
-                all_lines.push(Line::from(vec![time_part, Span::raw(*msg_line)]));
+                visible_lines.push(Line::from(vec![time_part, Span::raw(msg_line)]));
             }
         }
     }
 
-    // scroll_offset（イベントインデックス）→ 行番号に変換
-    let scroll_y = if log_state.scroll_offset < event_start_lines.len() {
-        event_start_lines[log_state.scroll_offset]
-    } else {
-        all_lines.len().saturating_sub(1)
-    };
-
-    let para = Paragraph::new(all_lines).scroll((scroll_y as u16, 0));
+    let para = Paragraph::new(visible_lines);
     frame.render_widget(para, area);
 }
 
