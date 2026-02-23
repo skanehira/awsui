@@ -3,9 +3,9 @@ source: src/tui/views/ecs_log.rs
 expression: buffer_to_string(&terminal)
 ---
 ┌ Logs: app ───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Starting application...                                                                                               │
+│Listening on port 8080                                                                                                │
 │Health check passed                                                                                                   │
-│                                                                                                                      │
-│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

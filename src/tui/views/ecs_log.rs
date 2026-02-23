@@ -92,9 +92,17 @@ fn render_log_content(frame: &mut Frame, log_state: &LogViewState, area: Rect) {
         .current_match_index
         .and_then(|mi| log_state.search_matches.get(mi).copied());
 
+    let effective_offset = if log_state.events.len() <= visible_height {
+        0
+    } else {
+        log_state
+            .scroll_offset
+            .min(log_state.events.len() - visible_height)
+    };
+
     let mut visible_lines: Vec<Line> = Vec::with_capacity(visible_height);
 
-    for event_idx in log_state.scroll_offset..log_state.events.len() {
+    for event_idx in effective_offset..log_state.events.len() {
         if visible_lines.len() >= visible_height {
             break;
         }
