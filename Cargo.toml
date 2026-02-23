@@ -25,7 +25,7 @@ serde_json = "1"
 sha1_smol = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-tui-input = { version = "0.11.1", features = ["crossterm"] }
+tui-input = { version = "0.14.0", features = ["crossterm"] }
 
 [features]
 mock-data = []
