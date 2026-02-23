@@ -58,6 +58,8 @@ pub enum Action {
     LogScrollDown,
     LogScrollToTop,
     LogScrollToBottom,
+    LogScrollLeft,
+    LogScrollRight,
     LogToggleAutoScroll,
     LogSearchNext,
     LogSearchPrev,

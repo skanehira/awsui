@@ -2691,6 +2691,7 @@ fn app_with_ecs_log_view() -> App {
                 next_forward_token: None,
                 auto_scroll: true,
                 scroll_offset: 0,
+                scroll_x: 0,
                 search_query: String::new(),
                 search_matches: Vec::new(),
                 current_match_index: None,

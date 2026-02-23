@@ -79,6 +79,7 @@ pub struct LogViewState {
     pub next_forward_token: Option<String>,
     pub auto_scroll: bool,
     pub scroll_offset: usize,
+    pub scroll_x: usize,
     pub search_query: String,
     pub search_matches: Vec<usize>,
     pub current_match_index: Option<usize>,
@@ -95,6 +96,14 @@ impl LogViewState {
         if self.scroll_offset < max {
             self.scroll_offset += 1;
         }
+    }
+
+    pub fn scroll_left(&mut self) {
+        self.scroll_x = self.scroll_x.saturating_sub(4);
+    }
+
+    pub fn scroll_right(&mut self) {
+        self.scroll_x += 4;
     }
 
     pub fn scroll_to_top(&mut self) {

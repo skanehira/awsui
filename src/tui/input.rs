@@ -327,6 +327,8 @@ fn handle_ecs_log_key(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => Action::LogScrollDown,
         KeyCode::Char('k') | KeyCode::Up => Action::LogScrollUp,
+        KeyCode::Char('h') | KeyCode::Left => Action::LogScrollLeft,
+        KeyCode::Char('l') | KeyCode::Right => Action::LogScrollRight,
         KeyCode::Char('g') => Action::LogScrollToTop,
         KeyCode::Char('G') => Action::LogScrollToBottom,
         KeyCode::Char('f') => Action::LogToggleAutoScroll,
@@ -1149,6 +1151,7 @@ mod tests {
                         next_forward_token: None,
                         auto_scroll: true,
                         scroll_offset: 0,
+                        scroll_x: 0,
                         search_query: String::new(),
                         search_matches: Vec::new(),
                         current_match_index: None,
@@ -1164,6 +1167,10 @@ mod tests {
     #[case(key(KeyCode::Down), Action::LogScrollDown)]
     #[case(key_char('k'), Action::LogScrollUp)]
     #[case(key(KeyCode::Up), Action::LogScrollUp)]
+    #[case(key_char('h'), Action::LogScrollLeft)]
+    #[case(key(KeyCode::Left), Action::LogScrollLeft)]
+    #[case(key_char('l'), Action::LogScrollRight)]
+    #[case(key(KeyCode::Right), Action::LogScrollRight)]
     #[case(key_char('g'), Action::LogScrollToTop)]
     #[case(key_char('G'), Action::LogScrollToBottom)]
     #[case(key_char('f'), Action::LogToggleAutoScroll)]

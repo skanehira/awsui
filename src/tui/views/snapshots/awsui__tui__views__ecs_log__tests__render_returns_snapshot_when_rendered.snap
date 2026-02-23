@@ -3,7 +3,7 @@ source: src/tui/views/ecs_log.rs
 expression: buffer_to_string(&terminal)
 ---
 ┌ Logs: app ───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│2024-01-23T10:00:02Z Health check passed                                                                              │
+│Health check passed                                                                                                   │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -21,4 +21,4 @@ expression: buffer_to_string(&terminal)
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- [LIVE] 3/3 j/k:scroll g/G:top/bottom f:toggle-live /:search n/N:next/prev Esc:back
+ [LIVE] 3/3 j/k:scroll h/l:hscroll g/G:top/bottom f:toggle-live /:search n/N:next/prev Esc:back

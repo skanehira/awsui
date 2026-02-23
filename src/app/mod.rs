@@ -653,6 +653,8 @@ impl App {
             }
             Action::LogScrollUp => self.log_scroll_up(),
             Action::LogScrollDown => self.log_scroll_down(),
+            Action::LogScrollLeft => self.log_scroll_left(),
+            Action::LogScrollRight => self.log_scroll_right(),
             Action::LogScrollToTop => self.log_scroll_to_top(),
             Action::LogScrollToBottom => self.log_scroll_to_bottom(),
             Action::LogToggleAutoScroll => self.log_toggle_auto_scroll(),
@@ -1075,6 +1077,18 @@ impl App {
         }
     }
 
+    fn log_scroll_left(&mut self) {
+        if let Some(state) = self.active_log_state_mut() {
+            state.scroll_left();
+        }
+    }
+
+    fn log_scroll_right(&mut self) {
+        if let Some(state) = self.active_log_state_mut() {
+            state.scroll_right();
+        }
+    }
+
     fn log_scroll_to_top(&mut self) {
         if let Some(state) = self.active_log_state_mut() {
             state.scroll_to_top();
@@ -1321,6 +1335,7 @@ impl App {
                     next_forward_token: None,
                     auto_scroll: true,
                     scroll_offset: 0,
+                    scroll_x: 0,
                     search_query: String::new(),
                     search_matches: Vec::new(),
                     current_match_index: None,

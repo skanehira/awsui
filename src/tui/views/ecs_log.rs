@@ -66,7 +66,7 @@ pub fn render(
         };
 
         let keybinds = format!(
-            "{} {}{} j/k:scroll g/G:top/bottom f:toggle-live /:search n/N:next/prev Esc:back",
+            "{} {}{} j/k:scroll h/l:hscroll g/G:top/bottom f:toggle-live /:search n/N:next/prev Esc:back",
             live_indicator, position, search_info,
         );
         let status = StatusBar::new(&keybinds);
@@ -78,6 +78,7 @@ pub fn render(
 ///
 /// scroll_offset から表示領域に収まる分だけ Line を構築する。
 /// 全イベントを走査しないため、イベント数に依存しない O(visible) の描画コスト。
+/// 横スクロールは Paragraph::scroll((0, x)) で適用する。
 fn render_log_content(frame: &mut Frame, log_state: &LogViewState, area: Rect) {
     if log_state.events.is_empty() {
         let empty = Paragraph::new("No log events").style(theme::header());
@@ -107,29 +108,22 @@ fn render_log_content(frame: &mut Frame, log_state: &LogViewState, area: Rect) {
             theme::search_match()
         };
 
-        for (line_idx, msg_line) in event.message.split('\n').enumerate() {
+        for msg_line in event.message.split('\n') {
             if visible_lines.len() >= visible_height {
                 break;
             }
 
-            let time_part = if line_idx == 0 {
-                Span::styled(format!("{} ", event.formatted_time), theme::header())
-            } else {
-                Span::raw(" ".repeat(event.formatted_time.len() + 1))
-            };
-
             if is_match {
                 let msg_spans = highlight_matches(msg_line, &log_state.search_query, match_style);
-                let mut spans = vec![time_part];
-                spans.extend(msg_spans);
-                visible_lines.push(Line::from(spans));
+                visible_lines.push(Line::from(msg_spans));
             } else {
-                visible_lines.push(Line::from(vec![time_part, Span::raw(msg_line)]));
+                visible_lines.push(Line::from(msg_line));
             }
         }
     }
 
-    let para = Paragraph::new(visible_lines);
+    let scroll_x = log_state.scroll_x as u16;
+    let para = Paragraph::new(visible_lines).scroll((0, scroll_x));
     frame.render_widget(para, area);
 }
 
@@ -203,6 +197,7 @@ mod tests {
             next_forward_token: None,
             auto_scroll: true,
             scroll_offset: 2,
+            scroll_x: 0,
             search_query: String::new(),
             search_matches: Vec::new(),
             current_match_index: None,
