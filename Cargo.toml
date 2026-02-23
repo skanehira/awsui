@@ -16,7 +16,7 @@ aws-sdk-s3 = "1"
 aws-sdk-secretsmanager = "1"
 clap = { version = "4", features = ["derive"] }
 cli-clipboard = "0.4"
-crossterm = { version = "0.28", features = ["event-stream"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 nucleo = "0.5"
 ratatui = "0.29"
