@@ -255,6 +255,34 @@ impl DashboardState {
         crate::recent::apply_recent_update(&mut self.all_recent_services, service);
         self.recent_services = self.all_recent_services.clone();
     }
+
+    pub fn move_up(&mut self) {
+        self.selected_index = self.selected_index.saturating_sub(1);
+    }
+
+    pub fn move_down(&mut self) {
+        let max = self.item_count().saturating_sub(1);
+        if self.selected_index < max {
+            self.selected_index += 1;
+        }
+    }
+
+    pub fn move_to_top(&mut self) {
+        self.selected_index = 0;
+    }
+
+    pub fn move_to_bottom(&mut self) {
+        self.selected_index = self.item_count().saturating_sub(1);
+    }
+
+    pub fn half_page_up(&mut self) {
+        self.selected_index = self.selected_index.saturating_sub(10);
+    }
+
+    pub fn half_page_down(&mut self) {
+        let max = self.item_count().saturating_sub(1);
+        self.selected_index = (self.selected_index + 10).min(max);
+    }
 }
 
 /// dispatch() が返す副作用

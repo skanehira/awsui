@@ -1000,56 +1000,13 @@ impl App {
                             );
                             return;
                         };
-                        // ログストリーム名を構築
-                        let task_id = self.find_tab(tab_id).and_then(|tab| {
-                            if let ServiceData::Ecs {
-                                tasks, nav_level, ..
-                            } = &tab.data
-                            {
-                                nav_level
-                                    .as_ref()
-                                    .and_then(|nl| nl.task_index())
-                                    .and_then(|idx| tasks.get(idx))
-                                    .map(|t| {
-                                        t.task_arn
-                                            .rsplit('/')
-                                            .next()
-                                            .unwrap_or(&t.task_arn)
-                                            .to_string()
-                                    })
-                            } else {
-                                None
-                            }
-                        });
-                        let Some(task_id) = task_id else { return };
                         let stream_prefix = config.stream_prefix.as_deref().unwrap_or_default();
-                        let log_stream =
-                            format!("{}/{}/{}", stream_prefix, config.container_name, task_id);
-                        if let Some(tab) = self.find_tab_mut(tab_id) {
-                            if let crate::tab::ServiceData::Ecs { nav_level, .. } = &mut tab.data
-                                && let Some(nl) = nav_level
-                            {
-                                let service_index = nl.service_index().unwrap_or(0);
-                                let task_index = nl.task_index().unwrap_or(0);
-                                *nav_level = Some(crate::tab::EcsNavLevel::LogView {
-                                    service_index,
-                                    task_index,
-                                    log_state: Box::new(crate::tab::LogViewState {
-                                        container_name: config.container_name.clone(),
-                                        log_group,
-                                        log_stream,
-                                        events: Vec::new(),
-                                        next_forward_token: None,
-                                        auto_scroll: true,
-                                        scroll_offset: 0,
-                                        search_query: String::new(),
-                                        search_matches: Vec::new(),
-                                        current_match_index: None,
-                                    }),
-                                });
-                            }
-                            tab.loading = true;
-                        }
+                        self.transition_to_log_view(
+                            tab_id,
+                            config.container_name.clone(),
+                            log_group,
+                            stream_prefix,
+                        );
                     } else {
                         // 複数コンテナ → 選択ダイアログ
                         let names: Vec<String> =
@@ -1168,7 +1125,7 @@ impl App {
 
     fn move_up(&mut self) {
         if self.show_dashboard {
-            self.dashboard.selected_index = self.dashboard.selected_index.saturating_sub(1);
+            self.dashboard.move_up();
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1178,10 +1135,7 @@ impl App {
 
     fn move_down(&mut self) {
         if self.show_dashboard {
-            let max = self.dashboard.item_count().saturating_sub(1);
-            if self.dashboard.selected_index < max {
-                self.dashboard.selected_index += 1;
-            }
+            self.dashboard.move_down();
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1191,7 +1145,7 @@ impl App {
 
     fn move_to_top(&mut self) {
         if self.show_dashboard {
-            self.dashboard.selected_index = 0;
+            self.dashboard.move_to_top();
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1201,7 +1155,7 @@ impl App {
 
     fn move_to_bottom(&mut self) {
         if self.show_dashboard {
-            self.dashboard.selected_index = self.dashboard.item_count().saturating_sub(1);
+            self.dashboard.move_to_bottom();
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1211,7 +1165,7 @@ impl App {
 
     fn half_page_up(&mut self) {
         if self.show_dashboard {
-            self.dashboard.selected_index = self.dashboard.selected_index.saturating_sub(10);
+            self.dashboard.half_page_up();
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1221,8 +1175,7 @@ impl App {
 
     fn half_page_down(&mut self) {
         if self.show_dashboard {
-            let max = self.dashboard.item_count().saturating_sub(1);
-            self.dashboard.selected_index = (self.dashboard.selected_index + 10).min(max);
+            self.dashboard.half_page_down();
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1316,61 +1269,76 @@ impl App {
         }
     }
 
+    /// ECSタスクから短縮タスクIDを抽出する
+    fn extract_ecs_task_id(&self, tab_id: crate::tab::TabId) -> Option<String> {
+        let tab = self.find_tab(tab_id)?;
+        if let crate::tab::ServiceData::Ecs {
+            tasks, nav_level, ..
+        } = &tab.data
+        {
+            nav_level
+                .as_ref()
+                .and_then(|nl| nl.task_index())
+                .and_then(|idx| tasks.get(idx))
+                .map(|t| {
+                    t.task_arn
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&t.task_arn)
+                        .to_string()
+                })
+        } else {
+            None
+        }
+    }
+
+    /// ECSログビューへ遷移する
+    fn transition_to_log_view(
+        &mut self,
+        tab_id: crate::tab::TabId,
+        container_name: String,
+        log_group: String,
+        stream_prefix: &str,
+    ) {
+        let Some(task_id) = self.extract_ecs_task_id(tab_id) else {
+            return;
+        };
+        let log_stream = format!("{}/{}/{}", stream_prefix, container_name, task_id);
+        if let Some(tab) = self.find_tab_mut(tab_id)
+            && let crate::tab::ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nl) = nav_level
+        {
+            let service_index = nl.service_index().unwrap_or(0);
+            let task_index = nl.task_index().unwrap_or(0);
+            *nav_level = Some(crate::tab::EcsNavLevel::LogView {
+                service_index,
+                task_index,
+                log_state: Box::new(crate::tab::LogViewState {
+                    container_name,
+                    log_group,
+                    log_stream,
+                    events: Vec::new(),
+                    next_forward_token: None,
+                    auto_scroll: true,
+                    scroll_offset: 0,
+                    search_query: String::new(),
+                    search_matches: Vec::new(),
+                    current_match_index: None,
+                }),
+            });
+            tab.loading = true;
+        }
+    }
+
     fn handle_container_select_show_logs(&mut self, container_name: String) {
         // pending_log_configsから選択されたコンテナのconfigを見つけてlog_stateを作成
         if let Some((_config_tab_id, configs)) = self.pending_log_configs.take()
             && let Some(config) = configs.iter().find(|c| c.container_name == container_name)
         {
             let log_group = config.log_group.clone().unwrap_or_default();
-            let tab_id = self.active_tab().map(|t| t.id);
-            let task_id = self.active_tab().and_then(|tab| {
-                if let crate::tab::ServiceData::Ecs {
-                    tasks, nav_level, ..
-                } = &tab.data
-                {
-                    nav_level
-                        .as_ref()
-                        .and_then(|nl| nl.task_index())
-                        .and_then(|idx| tasks.get(idx))
-                        .map(|t| {
-                            t.task_arn
-                                .rsplit('/')
-                                .next()
-                                .unwrap_or(&t.task_arn)
-                                .to_string()
-                        })
-                } else {
-                    None
-                }
-            });
-            if let (Some(_tab_id), Some(task_id)) = (tab_id, task_id) {
-                let stream_prefix = config.stream_prefix.as_deref().unwrap_or_default();
-                let log_stream = format!("{}/{}/{}", stream_prefix, container_name, task_id);
-                if let Some(tab) = self.active_tab_mut()
-                    && let crate::tab::ServiceData::Ecs { nav_level, .. } = &mut tab.data
-                {
-                    if let Some(nl) = nav_level.as_mut() {
-                        let service_index = nl.service_index().unwrap_or(0);
-                        let task_index = nl.task_index().unwrap_or(0);
-                        *nav_level = Some(crate::tab::EcsNavLevel::LogView {
-                            service_index,
-                            task_index,
-                            log_state: Box::new(crate::tab::LogViewState {
-                                container_name,
-                                log_group,
-                                log_stream,
-                                events: Vec::new(),
-                                next_forward_token: None,
-                                auto_scroll: true,
-                                scroll_offset: 0,
-                                search_query: String::new(),
-                                search_matches: Vec::new(),
-                                current_match_index: None,
-                            }),
-                        });
-                    }
-                    tab.loading = true;
-                }
+            let stream_prefix = config.stream_prefix.as_deref().unwrap_or_default();
+            if let Some(tab_id) = self.active_tab().map(|t| t.id) {
+                self.transition_to_log_view(tab_id, container_name, log_group, stream_prefix);
             }
         }
     }

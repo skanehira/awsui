@@ -50,6 +50,19 @@ impl App {
         }
     }
 
+    /// 削除権限がなければエラーメッセージを表示して false を返す
+    fn check_delete_permission(&mut self, service: &str) -> bool {
+        if self.can_delete(service) {
+            return true;
+        }
+        self.show_message(
+            MessageLevel::Error,
+            "Permission Denied",
+            format!("Delete not allowed. Use --allow-delete={service} or --allow-delete"),
+        );
+        false
+    }
+
     /// Delete操作のハンドリング
     pub(super) fn handle_delete(&mut self) {
         let Some(view) = self.current_view() else {
@@ -57,12 +70,7 @@ impl App {
         };
         match view {
             (ServiceKind::Ec2, crate::tab::TabView::List) => {
-                if !self.can_delete("ec2") {
-                    self.show_message(
-                        MessageLevel::Error,
-                        "Permission Denied",
-                        "Delete not allowed. Use --allow-delete=ec2 or --allow-delete",
-                    );
+                if !self.check_delete_permission("ec2") {
                     return;
                 }
                 let id = self.selected_instance().map(|i| i.instance_id.clone());
@@ -77,12 +85,7 @@ impl App {
                 }
             }
             (ServiceKind::S3, crate::tab::TabView::List) => {
-                if !self.can_delete("s3") {
-                    self.show_message(
-                        MessageLevel::Error,
-                        "Permission Denied",
-                        "Delete not allowed. Use --allow-delete=s3 or --allow-delete",
-                    );
+                if !self.check_delete_permission("s3") {
                     return;
                 }
                 let bucket_name = self.active_tab().and_then(|tab| {
@@ -106,12 +109,7 @@ impl App {
                 }
             }
             (ServiceKind::S3, crate::tab::TabView::Detail) => {
-                if !self.can_delete("s3") {
-                    self.show_message(
-                        MessageLevel::Error,
-                        "Permission Denied",
-                        "Delete not allowed. Use --allow-delete=s3 or --allow-delete",
-                    );
+                if !self.check_delete_permission("s3") {
                     return;
                 }
                 let obj_info = self.active_tab().and_then(|tab| {
@@ -143,12 +141,7 @@ impl App {
                 }
             }
             (ServiceKind::SecretsManager, crate::tab::TabView::List) => {
-                if !self.can_delete("secretsmanager") {
-                    self.show_message(
-                        MessageLevel::Error,
-                        "Permission Denied",
-                        "Delete not allowed. Use --allow-delete=secretsmanager or --allow-delete",
-                    );
+                if !self.check_delete_permission("secretsmanager") {
                     return;
                 }
                 let secret_name = self.active_tab().and_then(|tab| {
