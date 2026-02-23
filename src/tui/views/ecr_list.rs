@@ -11,20 +11,32 @@ use crate::tui::components::status_bar::render_footer;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
+/// ECRリポジトリ一覧画面の描画に必要なプロパティ
+pub struct EcrListProps<'a> {
+    pub repositories: &'a [Repository],
+    pub selected_index: usize,
+    pub filter_input: &'a Input,
+    pub mode: &'a Mode,
+    pub loading: bool,
+    pub spinner_tick: usize,
+    pub profile: Option<&'a str>,
+    pub region: Option<&'a str>,
+}
+
 /// ECRリポジトリ一覧画面を描画する
-#[allow(clippy::too_many_arguments)]
-pub fn render(
-    frame: &mut Frame,
-    repositories: &[Repository],
-    selected_index: usize,
-    filter_input: &Input,
-    mode: &Mode,
-    loading: bool,
-    spinner_tick: usize,
-    profile: Option<&str>,
-    region: Option<&str>,
-    area: Rect,
-) {
+pub fn render(frame: &mut Frame, props: &EcrListProps, area: Rect) {
+    let EcrListProps {
+        repositories,
+        selected_index,
+        filter_input,
+        mode,
+        loading,
+        spinner_tick,
+        profile,
+        region,
+    } = props;
+    let (selected_index, loading, spinner_tick) = (*selected_index, *loading, *spinner_tick);
+    let (profile, region) = (*profile, *region);
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -157,14 +169,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &repos,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    Some("dev-account"),
-                    Some("ap-northeast-1"),
+                    &EcrListProps {
+                        repositories: &repos,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: Some("dev-account"),
+                        region: Some("ap-northeast-1"),
+                    },
                     frame.area(),
                 );
             })
@@ -188,14 +202,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &repos,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &EcrListProps {
+                        repositories: &repos,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -228,14 +244,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &repos,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &EcrListProps {
+                        repositories: &repos,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -258,14 +276,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &repos,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    Some("dev-account"),
-                    Some("ap-northeast-1"),
+                    &EcrListProps {
+                        repositories: &repos,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: Some("dev-account"),
+                        region: Some("ap-northeast-1"),
+                    },
                     frame.area(),
                 );
             })
@@ -287,14 +307,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &repos,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    true,
-                    0,
-                    None,
-                    None,
+                    &EcrListProps {
+                        repositories: &repos,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: true,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -315,14 +337,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &repos,
-                    0,
-                    &input,
-                    &Mode::Filter,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &EcrListProps {
+                        repositories: &repos,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Filter,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -343,14 +367,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &repos,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &EcrListProps {
+                        repositories: &repos,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -384,14 +410,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &repos,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    0,
-                    Some("dev-account"),
-                    Some("ap-northeast-1"),
+                    &EcrListProps {
+                        repositories: &repos,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: Some("dev-account"),
+                        region: Some("ap-northeast-1"),
+                    },
                     frame.area(),
                 );
             })

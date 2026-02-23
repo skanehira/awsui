@@ -11,20 +11,32 @@ use crate::tui::components::status_bar::render_footer;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
+/// シークレット一覧画面の描画に必要なプロパティ
+pub struct SecretsListProps<'a> {
+    pub secrets: &'a [Secret],
+    pub selected_index: usize,
+    pub filter_input: &'a Input,
+    pub mode: &'a Mode,
+    pub loading: bool,
+    pub spinner_tick: usize,
+    pub profile: Option<&'a str>,
+    pub region: Option<&'a str>,
+}
+
 /// シークレット一覧画面を描画する
-#[allow(clippy::too_many_arguments)]
-pub fn render(
-    frame: &mut Frame,
-    secrets: &[Secret],
-    selected_index: usize,
-    filter_input: &Input,
-    mode: &Mode,
-    loading: bool,
-    profile: Option<&str>,
-    region: Option<&str>,
-    spinner_tick: usize,
-    area: Rect,
-) {
+pub fn render(frame: &mut Frame, props: &SecretsListProps, area: Rect) {
+    let SecretsListProps {
+        secrets,
+        selected_index,
+        filter_input,
+        mode,
+        loading,
+        spinner_tick,
+        profile,
+        region,
+    } = props;
+    let (selected_index, loading, spinner_tick) = (*selected_index, *loading, *spinner_tick);
+    let (profile, region) = (*profile, *region);
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -152,14 +164,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &[],
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    Some("dev-account"),
-                    Some("ap-northeast-1"),
-                    0,
+                    &SecretsListProps {
+                        secrets: &[],
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: Some("dev-account"),
+                        region: Some("ap-northeast-1"),
+                    },
                     frame.area(),
                 );
             })
@@ -180,14 +194,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &secrets,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    None,
-                    None,
-                    0,
+                    &SecretsListProps {
+                        secrets: &secrets,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -214,14 +230,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &secrets,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    None,
-                    None,
-                    0,
+                    &SecretsListProps {
+                        secrets: &secrets,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -245,14 +263,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &secrets,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    Some("dev-account"),
-                    Some("ap-northeast-1"),
-                    0,
+                    &SecretsListProps {
+                        secrets: &secrets,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: Some("dev-account"),
+                        region: Some("ap-northeast-1"),
+                    },
                     frame.area(),
                 );
             })
@@ -274,14 +294,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &[],
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    true,
-                    None,
-                    None,
-                    0,
+                    &SecretsListProps {
+                        secrets: &[],
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: true,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -302,14 +324,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &secrets,
-                    0,
-                    &input,
-                    &Mode::Filter,
-                    false,
-                    None,
-                    None,
-                    0,
+                    &SecretsListProps {
+                        secrets: &secrets,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Filter,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 );
             })
@@ -334,14 +358,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &secrets,
-                    0,
-                    &input,
-                    &Mode::Normal,
-                    false,
-                    Some("dev-account"),
-                    Some("ap-northeast-1"),
-                    0,
+                    &SecretsListProps {
+                        secrets: &secrets,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &Mode::Normal,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: Some("dev-account"),
+                        region: Some("ap-northeast-1"),
+                    },
                     frame.area(),
                 );
             })

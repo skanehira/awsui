@@ -206,8 +206,8 @@ fn handle_service_select_key(key: KeyEvent) -> Action {
     }
 }
 
-/// EC2一覧画面(Normalモード)のキー処理
-fn handle_ec2_list_key(key: KeyEvent) -> Action {
+/// リストビュー共通のキー処理
+fn handle_common_list_key(key: KeyEvent) -> Action {
     if is_quit_key(&key) {
         return Action::Quit;
     }
@@ -220,85 +220,45 @@ fn handle_ec2_list_key(key: KeyEvent) -> Action {
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageUp,
         KeyCode::Enter => Action::Enter,
         KeyCode::Char('/') => Action::StartFilter,
-        KeyCode::Char('S') => Action::StartStop,
-        KeyCode::Char('R') => Action::Reboot,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('y') => Action::CopyId,
-        KeyCode::Char('D') => Action::Delete,
-        KeyCode::Char('s') => Action::SsmConnect,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
         _ => Action::Noop,
     }
 }
 
-/// 汎用リストビュー(Normalモード)のキー処理 (ECR, ECS, S3, VPC, Secrets)
-fn handle_generic_list_key(key: KeyEvent) -> Action {
-    if is_quit_key(&key) {
-        return Action::Quit;
-    }
+/// EC2一覧画面(Normalモード)のキー処理
+fn handle_ec2_list_key(key: KeyEvent) -> Action {
     match key.code {
-        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-        KeyCode::Char('g') => Action::MoveToTop,
-        KeyCode::Char('G') => Action::MoveToBottom,
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageDown,
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageUp,
-        KeyCode::Enter => Action::Enter,
-        KeyCode::Char('/') => Action::StartFilter,
-        KeyCode::Char('r') => Action::Refresh,
-        KeyCode::Char('y') => Action::CopyId,
-        KeyCode::Char('?') => Action::ShowHelp,
-        KeyCode::Esc => Action::Back,
-        _ => Action::Noop,
+        KeyCode::Char('S') => Action::StartStop,
+        KeyCode::Char('R') => Action::Reboot,
+        KeyCode::Char('D') => Action::Delete,
+        KeyCode::Char('s') => Action::SsmConnect,
+        _ => handle_common_list_key(key),
     }
+}
+
+/// 汎用リストビュー(Normalモード)のキー処理 (ECR, ECS, VPC)
+fn handle_generic_list_key(key: KeyEvent) -> Action {
+    handle_common_list_key(key)
 }
 
 /// S3一覧画面(Normalモード)のキー処理
 fn handle_s3_list_key(key: KeyEvent) -> Action {
-    if is_quit_key(&key) {
-        return Action::Quit;
-    }
     match key.code {
-        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-        KeyCode::Char('g') => Action::MoveToTop,
-        KeyCode::Char('G') => Action::MoveToBottom,
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageDown,
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageUp,
-        KeyCode::Enter => Action::Enter,
-        KeyCode::Char('/') => Action::StartFilter,
-        KeyCode::Char('r') => Action::Refresh,
-        KeyCode::Char('y') => Action::CopyId,
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('D') => Action::Delete,
-        KeyCode::Char('?') => Action::ShowHelp,
-        KeyCode::Esc => Action::Back,
-        _ => Action::Noop,
+        _ => handle_common_list_key(key),
     }
 }
 
 /// Secrets一覧画面(Normalモード)のキー処理
 fn handle_secrets_list_key(key: KeyEvent) -> Action {
-    if is_quit_key(&key) {
-        return Action::Quit;
-    }
     match key.code {
-        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-        KeyCode::Char('g') => Action::MoveToTop,
-        KeyCode::Char('G') => Action::MoveToBottom,
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageDown,
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::HalfPageUp,
-        KeyCode::Enter => Action::Enter,
-        KeyCode::Char('/') => Action::StartFilter,
-        KeyCode::Char('r') => Action::Refresh,
-        KeyCode::Char('y') => Action::CopyId,
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('D') => Action::Delete,
-        KeyCode::Char('?') => Action::ShowHelp,
-        KeyCode::Esc => Action::Back,
-        _ => Action::Noop,
+        _ => handle_common_list_key(key),
     }
 }
 

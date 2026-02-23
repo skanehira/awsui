@@ -11,20 +11,32 @@ use crate::tui::components::status_bar::render_footer;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
+/// VPC一覧画面の描画に必要なプロパティ
+pub struct VpcListProps<'a> {
+    pub vpcs: &'a [Vpc],
+    pub selected_index: usize,
+    pub filter_input: &'a Input,
+    pub mode: &'a Mode,
+    pub loading: bool,
+    pub spinner_tick: usize,
+    pub profile: Option<&'a str>,
+    pub region: Option<&'a str>,
+}
+
 /// VPC一覧画面を描画する
-#[allow(clippy::too_many_arguments)]
-pub fn render(
-    frame: &mut Frame,
-    vpcs: &[Vpc],
-    selected_index: usize,
-    filter_input: &Input,
-    mode: &Mode,
-    loading: bool,
-    spinner_tick: usize,
-    profile: Option<&str>,
-    region: Option<&str>,
-    area: Rect,
-) {
+pub fn render(frame: &mut Frame, props: &VpcListProps, area: Rect) {
+    let VpcListProps {
+        vpcs,
+        selected_index,
+        filter_input,
+        mode,
+        loading,
+        spinner_tick,
+        profile,
+        region,
+    } = props;
+    let (selected_index, loading, spinner_tick) = (*selected_index, *loading, *spinner_tick);
+    let (profile, region) = (*profile, *region);
     // フッターは外枠の外に配置
     let outer_chunks = Layout::vertical([
         Constraint::Min(1),    // 外枠（テーブル）
@@ -166,14 +178,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &vpcs,
-                    0,
-                    &input,
-                    &mode,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &VpcListProps {
+                        vpcs: &vpcs,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &mode,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 )
             })
@@ -201,14 +215,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &vpcs,
-                    0,
-                    &input,
-                    &mode,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &VpcListProps {
+                        vpcs: &vpcs,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &mode,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 )
             })
@@ -237,14 +253,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &vpcs,
-                    0,
-                    &input,
-                    &mode,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &VpcListProps {
+                        vpcs: &vpcs,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &mode,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 )
             })
@@ -279,14 +297,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &vpcs,
-                    0,
-                    &input,
-                    &mode,
-                    false,
-                    0,
-                    Some("dev-account"),
-                    Some("ap-northeast-1"),
+                    &VpcListProps {
+                        vpcs: &vpcs,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &mode,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: Some("dev-account"),
+                        region: Some("ap-northeast-1"),
+                    },
                     frame.area(),
                 )
             })
@@ -309,14 +329,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &vpcs,
-                    0,
-                    &input,
-                    &mode,
-                    true,
-                    0,
-                    None,
-                    None,
+                    &VpcListProps {
+                        vpcs: &vpcs,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &mode,
+                        loading: true,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 )
             })
@@ -344,14 +366,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &vpcs,
-                    0,
-                    &input,
-                    &mode,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &VpcListProps {
+                        vpcs: &vpcs,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &mode,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 )
             })
@@ -373,14 +397,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &vpcs,
-                    0,
-                    &input,
-                    &mode,
-                    false,
-                    0,
-                    None,
-                    None,
+                    &VpcListProps {
+                        vpcs: &vpcs,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &mode,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: None,
+                        region: None,
+                    },
                     frame.area(),
                 )
             })
@@ -418,14 +444,16 @@ mod tests {
             .draw(|frame| {
                 render(
                     frame,
-                    &vpcs,
-                    0,
-                    &input,
-                    &mode,
-                    false,
-                    0,
-                    Some("dev-account"),
-                    Some("ap-northeast-1"),
+                    &VpcListProps {
+                        vpcs: &vpcs,
+                        selected_index: 0,
+                        filter_input: &input,
+                        mode: &mode,
+                        loading: false,
+                        spinner_tick: 0,
+                        profile: Some("dev-account"),
+                        region: Some("ap-northeast-1"),
+                    },
                     frame.area(),
                 )
             })
