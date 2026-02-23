@@ -1,11 +1,17 @@
 use super::*;
 use crate::action::Action;
+use crate::aws::ecr_model::{Image, Repository};
+use crate::aws::ecs_model::{Cluster, ContainerLogConfig};
+use crate::aws::logs_model::LogEvent;
 use crate::aws::model::InstanceState;
+use crate::aws::s3_model::{Bucket, S3Object};
+use crate::aws::secrets_model::{Secret, SecretDetail};
+use crate::aws::vpc_model::{Subnet, Vpc};
 use crate::cli::DeletePermissions;
 use crate::config::SsoProfile;
 use crate::error::AppError;
 use crate::event::TabEvent;
-use crate::tab::{ServiceData, TabView};
+use crate::tab::{EcsNavLevel, LogViewState, ServiceData, TabView};
 use std::collections::HashMap;
 
 fn create_test_instance(id: &str, name: &str, state: InstanceState) -> Instance {
@@ -1699,4 +1705,1447 @@ fn dispatch_enter_on_profile_selector_returns_start_sso_login_when_token_not_fou
     let ps = app.profile_selector.as_ref().unwrap();
     assert!(ps.logging_in);
     assert!(ps.login_output.is_empty());
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event テストヘルパー
+// ──────────────────────────────────────────────
+
+fn create_test_repository(name: &str) -> Repository {
+    Repository {
+        repository_name: name.to_string(),
+        repository_uri: format!("123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/{name}"),
+        registry_id: "123456789012".to_string(),
+        created_at: None,
+        image_tag_mutability: "MUTABLE".to_string(),
+    }
+}
+
+fn create_test_image(digest: &str) -> Image {
+    Image {
+        image_digest: digest.to_string(),
+        image_tags: vec!["latest".to_string()],
+        pushed_at: None,
+        image_size_bytes: Some(1024),
+    }
+}
+
+fn create_test_cluster(name: &str) -> Cluster {
+    Cluster {
+        cluster_name: name.to_string(),
+        cluster_arn: format!("arn:aws:ecs:ap-northeast-1:123456789012:cluster/{name}"),
+        status: "ACTIVE".to_string(),
+        running_tasks_count: 1,
+        pending_tasks_count: 0,
+        active_services_count: 1,
+        registered_container_instances_count: 0,
+    }
+}
+
+fn create_test_bucket(name: &str) -> Bucket {
+    Bucket {
+        name: name.to_string(),
+        creation_date: None,
+    }
+}
+
+fn create_test_s3_object(key: &str) -> S3Object {
+    S3Object {
+        key: key.to_string(),
+        size: Some(1024),
+        last_modified: None,
+        storage_class: Some("STANDARD".to_string()),
+        is_prefix: false,
+    }
+}
+
+fn create_test_vpc(id: &str) -> Vpc {
+    Vpc {
+        vpc_id: id.to_string(),
+        name: "test-vpc".to_string(),
+        cidr_block: "10.0.0.0/16".to_string(),
+        state: "available".to_string(),
+        is_default: false,
+        owner_id: "123456789012".to_string(),
+        tags: HashMap::new(),
+    }
+}
+
+fn create_test_subnet(id: &str, vpc_id: &str) -> Subnet {
+    Subnet {
+        subnet_id: id.to_string(),
+        name: "test-subnet".to_string(),
+        vpc_id: vpc_id.to_string(),
+        cidr_block: "10.0.1.0/24".to_string(),
+        availability_zone: "ap-northeast-1a".to_string(),
+        available_ip_count: 250,
+        state: "available".to_string(),
+        is_default: false,
+        map_public_ip_on_launch: false,
+    }
+}
+
+fn create_test_secret(name: &str) -> Secret {
+    Secret {
+        name: name.to_string(),
+        arn: format!("arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:{name}-AbCdEf"),
+        description: None,
+        last_changed_date: None,
+        last_accessed_date: None,
+        tags: HashMap::new(),
+    }
+}
+
+fn create_test_secret_detail(name: &str) -> SecretDetail {
+    SecretDetail {
+        name: name.to_string(),
+        arn: format!("arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:{name}-AbCdEf"),
+        description: None,
+        kms_key_id: None,
+        rotation_enabled: false,
+        rotation_lambda_arn: None,
+        rotation_days: None,
+        last_rotated_date: None,
+        last_changed_date: None,
+        last_accessed_date: None,
+        created_date: None,
+        tags: HashMap::new(),
+        version_ids: Vec::new(),
+        version_stages: Vec::new(),
+        secret_value: None,
+    }
+}
+
+fn app_with_tab(service: ServiceKind) -> App {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(service);
+    app
+}
+
+fn active_tab_id(app: &App) -> crate::tab::TabId {
+    app.active_tab().unwrap().id
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: InstancesLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_instances_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Ec2);
+    let tab_id = active_tab_id(&app);
+    let instances = vec![
+        create_test_instance("i-001", "web-1", InstanceState::Running),
+        create_test_instance("i-002", "web-2", InstanceState::Stopped),
+    ];
+
+    app.handle_tab_event(tab_id, TabEvent::InstancesLoaded(Ok(instances)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ec2 { instances } = &tab.data {
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances.filtered[0].instance_id, "i-001");
+    } else {
+        panic!("Expected Ec2 ServiceData");
+    }
+    assert!(app.message.is_none());
+}
+
+#[test]
+fn handle_tab_event_instances_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::Ec2);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::InstancesLoaded(Ok(vec![])));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No instances found");
+}
+
+#[test]
+fn handle_tab_event_instances_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Ec2);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::InstancesLoaded(Err(AppError::AwsApi("API error".to_string()))),
+    );
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: RepositoriesLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_repositories_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Ecr);
+    let tab_id = active_tab_id(&app);
+    let repos = vec![create_test_repository("my-app")];
+
+    app.handle_tab_event(tab_id, TabEvent::RepositoriesLoaded(Ok(repos)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecr { repositories, .. } = &tab.data {
+        assert_eq!(repositories.len(), 1);
+        assert_eq!(repositories.filtered[0].repository_name, "my-app");
+    } else {
+        panic!("Expected Ecr ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_repositories_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::Ecr);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::RepositoriesLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No repositories found");
+}
+
+#[test]
+fn handle_tab_event_repositories_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Ecr);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::RepositoriesLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: ImagesLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_images_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Ecr);
+    let tab_id = active_tab_id(&app);
+    let images = vec![create_test_image("sha256:abc123")];
+
+    app.handle_tab_event(tab_id, TabEvent::ImagesLoaded(Ok(images)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecr { images, .. } = &tab.data {
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].image_digest, "sha256:abc123");
+    } else {
+        panic!("Expected Ecr ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_images_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::Ecr);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::ImagesLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No images found");
+}
+
+#[test]
+fn handle_tab_event_images_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Ecr);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::ImagesLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: ClustersLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_clusters_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+    let clusters = vec![create_test_cluster("production")];
+
+    app.handle_tab_event(tab_id, TabEvent::ClustersLoaded(Ok(clusters)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecs { clusters, .. } = &tab.data {
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters.filtered[0].cluster_name, "production");
+    } else {
+        panic!("Expected Ecs ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_clusters_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::ClustersLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No clusters found");
+}
+
+#[test]
+fn handle_tab_event_clusters_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::ClustersLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: EcsServicesLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_ecs_services_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+    let services = vec![create_test_ecs_service(true)];
+
+    app.handle_tab_event(tab_id, TabEvent::EcsServicesLoaded(Ok(services)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecs { services, .. } = &tab.data {
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].service_name, "web-service");
+    } else {
+        panic!("Expected Ecs ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_ecs_services_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::EcsServicesLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No services found");
+}
+
+#[test]
+fn handle_tab_event_ecs_services_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::EcsServicesLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: EcsTasksLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_ecs_tasks_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+    let tasks = vec![create_test_task(
+        "abc123",
+        "arn:aws:ecs:ap-northeast-1:123456789012:cluster/prod",
+        vec![create_test_container("web", "RUNNING")],
+    )];
+
+    app.handle_tab_event(tab_id, TabEvent::EcsTasksLoaded(Ok(tasks)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecs { tasks, .. } = &tab.data {
+        assert_eq!(tasks.len(), 1);
+    } else {
+        panic!("Expected Ecs ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_ecs_tasks_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::EcsTasksLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No tasks found");
+}
+
+#[test]
+fn handle_tab_event_ecs_tasks_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Ecs);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::EcsTasksLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: BucketsLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_buckets_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::S3);
+    let tab_id = active_tab_id(&app);
+    let buckets = vec![create_test_bucket("my-bucket")];
+
+    app.handle_tab_event(tab_id, TabEvent::BucketsLoaded(Ok(buckets)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::S3 { buckets, .. } = &tab.data {
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets.filtered[0].name, "my-bucket");
+    } else {
+        panic!("Expected S3 ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_buckets_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::S3);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::BucketsLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No buckets found");
+}
+
+#[test]
+fn handle_tab_event_buckets_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::S3);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::BucketsLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: ObjectsLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_objects_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::S3);
+    let tab_id = active_tab_id(&app);
+    let objects = vec![create_test_s3_object("file.txt")];
+
+    app.handle_tab_event(tab_id, TabEvent::ObjectsLoaded(Ok(objects)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::S3 { objects, .. } = &tab.data {
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].key, "file.txt");
+    } else {
+        panic!("Expected S3 ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_objects_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::S3);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::ObjectsLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: VpcsLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_vpcs_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Vpc);
+    let tab_id = active_tab_id(&app);
+    let vpcs = vec![create_test_vpc("vpc-001")];
+
+    app.handle_tab_event(tab_id, TabEvent::VpcsLoaded(Ok(vpcs)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Vpc { vpcs, .. } = &tab.data {
+        assert_eq!(vpcs.len(), 1);
+        assert_eq!(vpcs.filtered[0].vpc_id, "vpc-001");
+    } else {
+        panic!("Expected Vpc ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_vpcs_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::Vpc);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::VpcsLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No VPCs found");
+}
+
+#[test]
+fn handle_tab_event_vpcs_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Vpc);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::VpcsLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: SubnetsLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_subnets_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Vpc);
+    let tab_id = active_tab_id(&app);
+    let subnets = vec![create_test_subnet("subnet-001", "vpc-001")];
+
+    app.handle_tab_event(tab_id, TabEvent::SubnetsLoaded(Ok(subnets)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Vpc { subnets, .. } = &tab.data {
+        assert_eq!(subnets.len(), 1);
+        assert_eq!(subnets[0].subnet_id, "subnet-001");
+    } else {
+        panic!("Expected Vpc ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_subnets_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::Vpc);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::SubnetsLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No subnets found");
+}
+
+#[test]
+fn handle_tab_event_subnets_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Vpc);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::SubnetsLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: SecretsLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_secrets_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::SecretsManager);
+    let tab_id = active_tab_id(&app);
+    let secrets = vec![create_test_secret("my-secret")];
+
+    app.handle_tab_event(tab_id, TabEvent::SecretsLoaded(Ok(secrets)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Secrets { secrets, .. } = &tab.data {
+        assert_eq!(secrets.len(), 1);
+        assert_eq!(secrets.filtered[0].name, "my-secret");
+    } else {
+        panic!("Expected Secrets ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_secrets_loaded_shows_info_when_empty() {
+    let mut app = app_with_tab(ServiceKind::SecretsManager);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::SecretsLoaded(Ok(vec![])));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Info);
+    assert_eq!(msg.body, "No secrets found");
+}
+
+#[test]
+fn handle_tab_event_secrets_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::SecretsManager);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::SecretsLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: SecretDetailLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_secret_detail_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::SecretsManager);
+    let tab_id = active_tab_id(&app);
+    let detail = Box::new(create_test_secret_detail("my-secret"));
+
+    app.handle_tab_event(tab_id, TabEvent::SecretDetailLoaded(Ok(detail)));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Secrets { detail, .. } = &tab.data {
+        assert!(detail.is_some());
+        assert_eq!(detail.as_ref().unwrap().name, "my-secret");
+    } else {
+        panic!("Expected Secrets ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_secret_detail_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::SecretsManager);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::SecretDetailLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: SecretValueLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_secret_value_loaded_sets_value_and_visible_when_ok() {
+    let mut app = app_with_tab(ServiceKind::SecretsManager);
+    let tab_id = active_tab_id(&app);
+    // まず detail を設定しておく
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Secrets { detail, .. } = &mut tab.data {
+            *detail = Some(Box::new(create_test_secret_detail("my-secret")));
+        }
+    }
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::SecretValueLoaded(Ok("supersecret".to_string())),
+    );
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Secrets {
+        detail,
+        value_visible,
+        ..
+    } = &tab.data
+    {
+        assert!(*value_visible);
+        assert_eq!(
+            detail.as_ref().unwrap().secret_value,
+            Some("supersecret".to_string())
+        );
+    } else {
+        panic!("Expected Secrets ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_secret_value_loaded_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::SecretsManager);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::SecretValueLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: ActionCompleted テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_action_completed_shows_success_and_sets_loading_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Ec2);
+    let tab_id = active_tab_id(&app);
+    {
+        let tab = app.active_tab_mut().unwrap();
+        tab.loading = false;
+    }
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::ActionCompleted(Ok("Instance started".to_string())),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Success);
+    assert_eq!(msg.body, "Instance started");
+    // ActionCompleted成功時はリロードのためloading=trueになる
+    let tab = app.active_tab().unwrap();
+    assert!(tab.loading);
+}
+
+#[test]
+fn handle_tab_event_action_completed_shows_error_when_err() {
+    let mut app = app_with_tab(ServiceKind::Ec2);
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::ActionCompleted(Err(AppError::AwsApi("action failed".to_string()))),
+    );
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: NavigateVpcLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_navigate_vpc_loaded_sets_data_when_ok() {
+    let mut app = app_with_tab(ServiceKind::Vpc);
+    let tab_id = active_tab_id(&app);
+    let vpcs = vec![create_test_vpc("vpc-target")];
+    let subnets = vec![create_test_subnet("subnet-001", "vpc-target")];
+
+    app.handle_tab_event(tab_id, TabEvent::NavigateVpcLoaded(Ok((vpcs, subnets))));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Vpc { vpcs, subnets } = &tab.data {
+        assert_eq!(vpcs.filtered[0].vpc_id, "vpc-target");
+        assert_eq!(subnets.len(), 1);
+    } else {
+        panic!("Expected Vpc ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_navigate_vpc_loaded_rolls_back_stack_when_err() {
+    let mut app = app_with_tab(ServiceKind::Vpc);
+    let tab_id = active_tab_id(&app);
+    // ナビゲーションスタックにエントリを積む
+    {
+        let tab = app.active_tab_mut().unwrap();
+        tab.selected_index = 5; // ナビゲーション前と異なる値
+        tab.navigation_stack.push(NavigationEntry {
+            view: (ServiceKind::Vpc, TabView::Detail),
+            selected_index: 2,
+            detail_tag_index: 3,
+            detail_tab: DetailTab::Overview,
+            label: "vpc-001".to_string(),
+        });
+    }
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::NavigateVpcLoaded(Err(AppError::AwsApi("VPC not found".to_string()))),
+    );
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    // スタックが巻き戻されて元のインデックスが復元される
+    assert_eq!(tab.selected_index, 2);
+    assert_eq!(tab.detail_tag_index, 3);
+    assert!(tab.navigation_stack.is_empty());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: EcsLogConfigsLoaded テスト
+// ──────────────────────────────────────────────
+
+fn app_with_ecs_task_detail_for_logs() -> App {
+    let cluster_arn = "arn:aws:ecs:ap-northeast-1:123456789012:cluster/production";
+    let service = create_test_ecs_service(true);
+    let tasks = vec![create_test_task(
+        "abc123",
+        cluster_arn,
+        vec![create_test_container("web", "RUNNING")],
+    )];
+    app_with_ecs_task_detail(service, tasks)
+}
+
+#[test]
+fn handle_tab_event_ecs_log_configs_loaded_shows_error_when_empty_configs() {
+    let mut app = app_with_ecs_task_detail_for_logs();
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(tab_id, TabEvent::EcsLogConfigsLoaded(Ok(vec![])));
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+    assert_eq!(msg.body, "No awslogs configuration found");
+}
+
+#[test]
+fn handle_tab_event_ecs_log_configs_loaded_enters_log_view_when_single_config() {
+    let mut app = app_with_ecs_task_detail_for_logs();
+    let tab_id = active_tab_id(&app);
+    let configs = vec![ContainerLogConfig {
+        container_name: "web".to_string(),
+        log_group: Some("/ecs/production/web".to_string()),
+        stream_prefix: Some("ecs".to_string()),
+        region: Some("ap-northeast-1".to_string()),
+    }];
+
+    app.handle_tab_event(tab_id, TabEvent::EcsLogConfigsLoaded(Ok(configs)));
+
+    let tab = app.active_tab().unwrap();
+    // ログ取得中なので loading=true
+    assert!(tab.loading);
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        match nav_level.as_ref().unwrap() {
+            EcsNavLevel::LogView {
+                log_state,
+                service_index,
+                task_index,
+            } => {
+                assert_eq!(*service_index, 0);
+                assert_eq!(*task_index, 0);
+                assert_eq!(log_state.container_name, "web");
+                assert_eq!(log_state.log_group, "/ecs/production/web");
+                assert_eq!(log_state.log_stream, "ecs/web/abc123");
+                assert!(log_state.auto_scroll);
+                assert!(log_state.events.is_empty());
+            }
+            other => panic!("Expected LogView, got {:?}", other),
+        }
+    } else {
+        panic!("Expected Ecs ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_ecs_log_configs_loaded_shows_error_when_no_log_group() {
+    let mut app = app_with_ecs_task_detail_for_logs();
+    let tab_id = active_tab_id(&app);
+    let configs = vec![ContainerLogConfig {
+        container_name: "web".to_string(),
+        log_group: None, // ロググループなし
+        stream_prefix: None,
+        region: None,
+    }];
+
+    app.handle_tab_event(tab_id, TabEvent::EcsLogConfigsLoaded(Ok(configs)));
+
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+    assert_eq!(msg.body, "No log group configured");
+}
+
+#[test]
+fn handle_tab_event_ecs_log_configs_loaded_shows_container_select_when_multiple_configs() {
+    let mut app = app_with_ecs_task_detail_for_logs();
+    let tab_id = active_tab_id(&app);
+    let configs = vec![
+        ContainerLogConfig {
+            container_name: "web".to_string(),
+            log_group: Some("/ecs/web".to_string()),
+            stream_prefix: Some("ecs".to_string()),
+            region: None,
+        },
+        ContainerLogConfig {
+            container_name: "sidecar".to_string(),
+            log_group: Some("/ecs/sidecar".to_string()),
+            stream_prefix: Some("ecs".to_string()),
+            region: None,
+        },
+    ];
+
+    app.handle_tab_event(tab_id, TabEvent::EcsLogConfigsLoaded(Ok(configs)));
+
+    let tab = app.active_tab().unwrap();
+    assert_eq!(
+        tab.mode,
+        Mode::ContainerSelect {
+            names: vec!["web".to_string(), "sidecar".to_string()],
+            selected: 0,
+            purpose: ContainerSelectPurpose::ShowLogs,
+        }
+    );
+    // pending_log_configs に保存される
+    assert!(app.pending_log_configs.is_some());
+    let (stored_tab_id, stored_configs) = app.pending_log_configs.as_ref().unwrap();
+    assert_eq!(*stored_tab_id, tab_id);
+    assert_eq!(stored_configs.len(), 2);
+}
+
+#[test]
+fn handle_tab_event_ecs_log_configs_loaded_shows_error_when_err() {
+    let mut app = app_with_ecs_task_detail_for_logs();
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::EcsLogConfigsLoaded(Err(AppError::AwsApi("fail".to_string()))),
+    );
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: EcsLogEventsLoaded テスト
+// ──────────────────────────────────────────────
+
+fn app_with_ecs_log_view() -> App {
+    let mut app = app_with_ecs_task_detail_for_logs();
+    let tab = app.active_tab_mut().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &mut tab.data {
+        *nav_level = Some(EcsNavLevel::LogView {
+            service_index: 0,
+            task_index: 0,
+            log_state: Box::new(LogViewState {
+                container_name: "web".to_string(),
+                log_group: "/ecs/web".to_string(),
+                log_stream: "ecs/web/abc123".to_string(),
+                events: Vec::new(),
+                next_forward_token: None,
+                auto_scroll: true,
+                scroll_offset: 0,
+                search_query: String::new(),
+                search_matches: Vec::new(),
+                current_match_index: None,
+            }),
+        });
+    }
+    app
+}
+
+fn create_test_log_event(msg: &str) -> LogEvent {
+    LogEvent {
+        timestamp: 1700000000000,
+        formatted_time: "2023-11-14T22:13:20Z".to_string(),
+        message: msg.to_string(),
+    }
+}
+
+#[test]
+fn handle_tab_event_ecs_log_events_loaded_appends_events_when_ok() {
+    let mut app = app_with_ecs_log_view();
+    let tab_id = active_tab_id(&app);
+    let events = vec![
+        create_test_log_event("log line 1"),
+        create_test_log_event("log line 2"),
+    ];
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::EcsLogEventsLoaded(Ok((events, Some("next-token".to_string())))),
+    );
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert_eq!(state.events.len(), 2);
+        assert_eq!(state.next_forward_token, Some("next-token".to_string()));
+        // auto_scroll=true なので scroll_offset は末尾
+        assert_eq!(state.scroll_offset, 1); // len - 1
+    } else {
+        panic!("Expected Ecs ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_ecs_log_events_loaded_recomputes_search_when_query_exists() {
+    let mut app = app_with_ecs_log_view();
+    let tab_id = active_tab_id(&app);
+    // 検索クエリを設定
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nav) = nav_level
+            && let Some(state) = nav.log_state_mut()
+        {
+            state.search_query = "error".to_string();
+        }
+    }
+    let events = vec![
+        create_test_log_event("info: ok"),
+        create_test_log_event("error: something failed"),
+        create_test_log_event("info: done"),
+    ];
+
+    app.handle_tab_event(tab_id, TabEvent::EcsLogEventsLoaded(Ok((events, None))));
+
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert_eq!(state.events.len(), 3);
+        // "error" を含む行は index 1
+        assert_eq!(state.search_matches, vec![1]);
+    } else {
+        panic!("Expected Ecs ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_ecs_log_events_loaded_shows_error_when_err() {
+    let mut app = app_with_ecs_log_view();
+    let tab_id = active_tab_id(&app);
+
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::EcsLogEventsLoaded(Err(AppError::AwsApi("log fetch failed".to_string()))),
+    );
+
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// dispatch: ShowLogs テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn dispatch_show_logs_sets_loading_when_tab_active() {
+    let mut app = app_with_ecs_task_detail_for_logs();
+    {
+        let tab = app.active_tab_mut().unwrap();
+        tab.loading = false;
+    }
+
+    let side_effect = app.dispatch(Action::ShowLogs);
+
+    assert_eq!(side_effect, SideEffect::None);
+    let tab = app.active_tab().unwrap();
+    assert!(tab.loading);
+}
+
+// ──────────────────────────────────────────────
+// dispatch: LogScroll* テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn dispatch_log_scroll_down_increments_scroll_offset_when_in_log_view() {
+    let mut app = app_with_ecs_log_view();
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nav) = nav_level
+            && let Some(state) = nav.log_state_mut()
+        {
+            state.events = vec![
+                create_test_log_event("line 1"),
+                create_test_log_event("line 2"),
+                create_test_log_event("line 3"),
+            ];
+            state.scroll_offset = 0;
+            state.auto_scroll = false;
+        }
+    }
+
+    app.dispatch(Action::LogScrollDown);
+
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert_eq!(state.scroll_offset, 1);
+    }
+}
+
+#[test]
+fn dispatch_log_scroll_up_decrements_scroll_offset_when_in_log_view() {
+    let mut app = app_with_ecs_log_view();
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nav) = nav_level
+            && let Some(state) = nav.log_state_mut()
+        {
+            state.events = vec![
+                create_test_log_event("line 1"),
+                create_test_log_event("line 2"),
+            ];
+            state.scroll_offset = 1;
+            state.auto_scroll = false;
+        }
+    }
+
+    app.dispatch(Action::LogScrollUp);
+
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert_eq!(state.scroll_offset, 0);
+    }
+}
+
+#[test]
+fn dispatch_log_scroll_to_top_sets_offset_to_zero_when_in_log_view() {
+    let mut app = app_with_ecs_log_view();
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nav) = nav_level
+            && let Some(state) = nav.log_state_mut()
+        {
+            state.events = vec![
+                create_test_log_event("line 1"),
+                create_test_log_event("line 2"),
+            ];
+            state.scroll_offset = 1;
+        }
+    }
+
+    app.dispatch(Action::LogScrollToTop);
+
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert_eq!(state.scroll_offset, 0);
+        assert!(!state.auto_scroll);
+    }
+}
+
+#[test]
+fn dispatch_log_scroll_to_bottom_sets_offset_to_last_and_enables_auto_scroll() {
+    let mut app = app_with_ecs_log_view();
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nav) = nav_level
+            && let Some(state) = nav.log_state_mut()
+        {
+            state.events = vec![
+                create_test_log_event("line 1"),
+                create_test_log_event("line 2"),
+                create_test_log_event("line 3"),
+            ];
+            state.scroll_offset = 0;
+            state.auto_scroll = false;
+        }
+    }
+
+    app.dispatch(Action::LogScrollToBottom);
+
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert_eq!(state.scroll_offset, 2); // len - 1
+        assert!(state.auto_scroll);
+    }
+}
+
+// ──────────────────────────────────────────────
+// dispatch: LogToggleAutoScroll テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn dispatch_log_toggle_auto_scroll_toggles_state_when_in_log_view() {
+    let mut app = app_with_ecs_log_view();
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nav) = nav_level
+            && let Some(state) = nav.log_state_mut()
+        {
+            state.auto_scroll = true;
+            state.events = vec![create_test_log_event("line 1")];
+        }
+    }
+
+    app.dispatch(Action::LogToggleAutoScroll);
+
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert!(!state.auto_scroll);
+    }
+}
+
+// ──────────────────────────────────────────────
+// dispatch: LogSearch* テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn dispatch_log_search_next_moves_to_next_match_when_in_log_view() {
+    let mut app = app_with_ecs_log_view();
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nav) = nav_level
+            && let Some(state) = nav.log_state_mut()
+        {
+            state.events = vec![
+                create_test_log_event("error: first"),
+                create_test_log_event("info: ok"),
+                create_test_log_event("error: second"),
+            ];
+            state.search_query = "error".to_string();
+            state.search_matches = vec![0, 2];
+            state.current_match_index = Some(0);
+            state.scroll_offset = 0;
+        }
+    }
+
+    app.dispatch(Action::LogSearchNext);
+
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert_eq!(state.current_match_index, Some(1));
+        assert_eq!(state.scroll_offset, 2);
+    }
+}
+
+#[test]
+fn dispatch_log_search_prev_moves_to_previous_match_when_in_log_view() {
+    let mut app = app_with_ecs_log_view();
+    {
+        let tab = app.active_tab_mut().unwrap();
+        if let ServiceData::Ecs { nav_level, .. } = &mut tab.data
+            && let Some(nav) = nav_level
+            && let Some(state) = nav.log_state_mut()
+        {
+            state.events = vec![
+                create_test_log_event("error: first"),
+                create_test_log_event("info: ok"),
+                create_test_log_event("error: second"),
+            ];
+            state.search_query = "error".to_string();
+            state.search_matches = vec![0, 2];
+            state.current_match_index = Some(1);
+            state.scroll_offset = 2;
+        }
+    }
+
+    app.dispatch(Action::LogSearchPrev);
+
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        let state = nav_level.as_ref().unwrap().log_state().unwrap();
+        assert_eq!(state.current_match_index, Some(0));
+        assert_eq!(state.scroll_offset, 0);
+    }
+}
+
+// ──────────────────────────────────────────────
+// dispatch: ContainerSelect テスト
+// ──────────────────────────────────────────────
+
+fn app_with_container_select(purpose: ContainerSelectPurpose) -> App {
+    let service = create_test_ecs_service(true);
+    let tasks = vec![create_test_task(
+        "abc123",
+        &service.cluster_arn,
+        vec![
+            create_test_container("web", "RUNNING"),
+            create_test_container("sidecar", "RUNNING"),
+        ],
+    )];
+    let mut app = app_with_ecs_task_detail(service, tasks);
+    let tab = app.active_tab_mut().unwrap();
+    tab.mode = Mode::ContainerSelect {
+        names: vec!["web".to_string(), "sidecar".to_string()],
+        selected: 0,
+        purpose,
+    };
+    app
+}
+
+#[test]
+fn dispatch_container_select_down_increments_selected_index() {
+    let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
+
+    app.dispatch(Action::ContainerSelectDown);
+
+    let tab = app.active_tab().unwrap();
+    assert!(matches!(
+        &tab.mode,
+        Mode::ContainerSelect { selected: 1, .. }
+    ));
+}
+
+#[test]
+fn dispatch_container_select_down_clamps_at_max() {
+    let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
+    let tab = app.active_tab_mut().unwrap();
+    if let Mode::ContainerSelect { selected, .. } = &mut tab.mode {
+        *selected = 1;
+    }
+
+    app.dispatch(Action::ContainerSelectDown);
+
+    let tab = app.active_tab().unwrap();
+    assert!(matches!(
+        &tab.mode,
+        Mode::ContainerSelect { selected: 1, .. }
+    ));
+}
+
+#[test]
+fn dispatch_container_select_up_decrements_selected_index() {
+    let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
+    let tab = app.active_tab_mut().unwrap();
+    if let Mode::ContainerSelect { selected, .. } = &mut tab.mode {
+        *selected = 1;
+    }
+
+    app.dispatch(Action::ContainerSelectUp);
+
+    let tab = app.active_tab().unwrap();
+    assert!(matches!(
+        &tab.mode,
+        Mode::ContainerSelect { selected: 0, .. }
+    ));
+}
+
+#[test]
+fn dispatch_container_select_up_clamps_at_zero() {
+    let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
+
+    app.dispatch(Action::ContainerSelectUp);
+
+    let tab = app.active_tab().unwrap();
+    assert!(matches!(
+        &tab.mode,
+        Mode::ContainerSelect { selected: 0, .. }
+    ));
+}
+
+#[test]
+fn dispatch_container_select_cancel_returns_to_normal_mode() {
+    let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
+
+    app.dispatch(Action::ContainerSelectCancel);
+
+    let tab = app.active_tab().unwrap();
+    assert_eq!(tab.mode, Mode::Normal);
+}
+
+#[test]
+fn dispatch_container_select_confirm_enters_log_view_when_purpose_is_show_logs() {
+    let mut app = app_with_container_select(ContainerSelectPurpose::ShowLogs);
+    let tab_id = active_tab_id(&app);
+    app.pending_log_configs = Some((
+        tab_id,
+        vec![
+            ContainerLogConfig {
+                container_name: "web".to_string(),
+                log_group: Some("/ecs/web".to_string()),
+                stream_prefix: Some("ecs".to_string()),
+                region: None,
+            },
+            ContainerLogConfig {
+                container_name: "sidecar".to_string(),
+                log_group: Some("/ecs/sidecar".to_string()),
+                stream_prefix: Some("ecs".to_string()),
+                region: None,
+            },
+        ],
+    ));
+
+    let side_effect = app.dispatch(Action::ContainerSelectConfirm);
+
+    assert_eq!(side_effect, SideEffect::None);
+    let tab = app.active_tab().unwrap();
+    assert_eq!(tab.mode, Mode::Normal);
+    if let ServiceData::Ecs { nav_level, .. } = &tab.data {
+        match nav_level.as_ref().unwrap() {
+            EcsNavLevel::LogView { log_state, .. } => {
+                assert_eq!(log_state.container_name, "web");
+                assert_eq!(log_state.log_group, "/ecs/web");
+                assert_eq!(log_state.log_stream, "ecs/web/abc123");
+            }
+            other => panic!("Expected LogView, got {:?}", other),
+        }
+    } else {
+        panic!("Expected Ecs ServiceData");
+    }
+    assert!(app.pending_log_configs.is_none());
 }
