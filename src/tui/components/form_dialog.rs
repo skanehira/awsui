@@ -30,6 +30,10 @@ impl Widget for FormDialog<'_> {
             crate::app::FormKind::CreateS3Bucket => " Create S3 Bucket ",
             crate::app::FormKind::CreateSecret => " Create Secret ",
             crate::app::FormKind::UpdateSecretValue => " Update Value ",
+            crate::app::FormKind::ScaleEcsService => " Scale Service ",
+            crate::app::FormKind::CreateEcrRepository => " Create ECR Repository ",
+            crate::app::FormKind::DownloadS3Object => " Download Object ",
+            crate::app::FormKind::UploadS3Object => " Upload Object ",
         };
 
         let block = Block::default()

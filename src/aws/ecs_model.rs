@@ -27,6 +27,7 @@ pub struct Service {
     pub health_check_grace_period_seconds: Option<i32>,
     pub deployment_status: Option<String>,
     pub enable_execute_command: bool,
+    pub deployments: Vec<Deployment>,
 }
 
 /// ECSタスクのドメインモデル
@@ -59,6 +60,18 @@ pub struct Container {
     pub exit_code: Option<i32>,
     pub health_status: Option<String>,
     pub reason: Option<String>,
+}
+
+/// ECSデプロイメントのドメインモデル
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Deployment {
+    pub id: String,
+    pub status: String,
+    pub desired_count: i32,
+    pub running_count: i32,
+    pub pending_count: i32,
+    pub rollout_state: Option<String>,
+    pub created_at: Option<String>,
 }
 
 /// コンテナのawslogsログ設定

@@ -1,24 +1,27 @@
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Row};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Row};
 
-use crate::aws::s3_model::S3Object;
+use crate::aws::s3_model::{BucketSettings, S3DetailTab, S3Object};
 use crate::tui::components::loading::Loading;
 use crate::tui::components::status_bar::StatusBar;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
-/// S3バケット詳細（オブジェクト一覧）画面を描画する
+/// S3バケット詳細画面を描画する
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
     bucket_name: &str,
     objects: &[S3Object],
     current_prefix: &str,
+    detail_tab: &S3DetailTab,
+    bucket_settings: Option<&BucketSettings>,
     selected_index: usize,
     loading: bool,
     spinner_tick: usize,
+    can_delete: bool,
     area: Rect,
 ) {
     // フッターは外枠の外に配置
@@ -43,18 +46,101 @@ pub fn render(
     let inner = outer_block.inner(outer_chunks[0]);
     frame.render_widget(outer_block, outer_chunks[0]);
 
-    // メインコンテンツ
-    if loading {
-        let loading_widget = Loading::new("Loading objects...", spinner_tick);
-        frame.render_widget(loading_widget, inner);
-    } else {
-        render_table(frame, objects, selected_index, inner);
+    // 内側レイアウト: タブバー + コンテンツ
+    let inner_chunks = Layout::vertical([
+        Constraint::Length(1), // タブバー
+        Constraint::Min(1),    // コンテンツ
+    ])
+    .split(inner);
+
+    // タブバー
+    render_tab_bar(frame, detail_tab, inner_chunks[0]);
+
+    // コンテンツ（タブに応じて切り替え）
+    match detail_tab {
+        S3DetailTab::Objects => {
+            if loading {
+                let loading_widget = Loading::new("Loading objects...", spinner_tick);
+                frame.render_widget(loading_widget, inner_chunks[1]);
+            } else {
+                render_table(frame, objects, selected_index, inner_chunks[1]);
+            }
+        }
+        S3DetailTab::Settings => {
+            if loading {
+                let loading_widget = Loading::new("Loading bucket settings...", spinner_tick);
+                frame.render_widget(loading_widget, inner_chunks[1]);
+            } else {
+                render_settings(frame, bucket_settings, inner_chunks[1]);
+            }
+        }
     }
 
     // ステータスバー
-    let keybinds = "j/k:move Enter:open Esc:back ?:help";
+    let keybinds = if can_delete {
+        "j/k:move Enter:open d:download u:upload D:delete [/]:tab Esc:back ?:help"
+    } else {
+        "j/k:move Enter:open d:download u:upload [/]:tab Esc:back ?:help"
+    };
     let status = StatusBar::new(keybinds);
     frame.render_widget(status, outer_chunks[1]);
+}
+
+/// タブバーを描画
+fn render_tab_bar(frame: &mut Frame, detail_tab: &S3DetailTab, area: Rect) {
+    let style_for = |tab: S3DetailTab| {
+        if *detail_tab == tab {
+            theme::active()
+        } else {
+            theme::inactive()
+        }
+    };
+    let tab_line = Line::from(vec![
+        Span::styled(" Objects ", style_for(S3DetailTab::Objects)),
+        Span::raw(" | "),
+        Span::styled(" Settings ", style_for(S3DetailTab::Settings)),
+    ]);
+    frame.render_widget(Paragraph::new(tab_line), area);
+}
+
+/// バケット設定を描画
+fn render_settings(frame: &mut Frame, settings: Option<&BucketSettings>, area: Rect) {
+    match settings {
+        Some(s) => {
+            let text = vec![
+                Line::from(vec![
+                    Span::styled("Region:      ", theme::header()),
+                    Span::raw(&s.region),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Versioning:  ", theme::header()),
+                    Span::raw(&s.versioning),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Encryption:  ", theme::header()),
+                    Span::raw(&s.encryption),
+                ]),
+            ];
+            let para = Paragraph::new(text).block(
+                Block::default()
+                    .title(" Bucket Settings ")
+                    .borders(Borders::ALL),
+            );
+            frame.render_widget(para, area);
+        }
+        None => {
+            let para = Paragraph::new("No settings available")
+                .alignment(Alignment::Center)
+                .block(
+                    Block::default()
+                        .title(" Bucket Settings ")
+                        .borders(Borders::ALL),
+                );
+            frame.render_widget(para, area);
+        }
+    }
 }
 
 /// テーブルを描画
@@ -166,7 +252,21 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Objects,
+                    None,
+                    0,
+                    false,
+                    0,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -186,9 +286,12 @@ mod tests {
                     "my-bucket",
                     &objects,
                     "logs/2025/",
+                    &S3DetailTab::Objects,
+                    None,
                     0,
                     false,
                     0,
+                    true,
                     frame.area(),
                 )
             })
@@ -206,7 +309,21 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Objects,
+                    None,
+                    0,
+                    false,
+                    0,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -226,7 +343,21 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Objects,
+                    None,
+                    0,
+                    false,
+                    0,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -242,7 +373,21 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, true, 0, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Objects,
+                    None,
+                    0,
+                    true,
+                    0,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -256,7 +401,21 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, "my-bucket", &objects, "", 0, false, 0, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Objects,
+                    None,
+                    0,
+                    false,
+                    0,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -318,9 +477,12 @@ mod tests {
                     "my-prod-bucket",
                     &objects,
                     "",
+                    &S3DetailTab::Objects,
+                    None,
                     0,
                     false,
                     0,
+                    true,
                     frame.area(),
                 )
             })
@@ -346,9 +508,136 @@ mod tests {
                     "my-prod-bucket",
                     &objects,
                     "logs/2025/",
+                    &S3DetailTab::Objects,
+                    None,
                     0,
                     false,
                     0,
+                    true,
+                    frame.area(),
+                )
+            })
+            .unwrap();
+
+        insta::assert_snapshot!(buffer_to_string(&terminal));
+    }
+
+    #[test]
+    fn render_returns_settings_when_settings_tab_with_data() {
+        let objects: Vec<S3Object> = vec![];
+        let settings = BucketSettings {
+            region: "ap-northeast-1".to_string(),
+            versioning: "Enabled".to_string(),
+            encryption: "AES256".to_string(),
+        };
+        let backend = TestBackend::new(80, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Settings,
+                    Some(&settings),
+                    0,
+                    false,
+                    0,
+                    true,
+                    frame.area(),
+                )
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Bucket Settings"));
+        assert!(content.contains("ap-northeast-1"));
+        assert!(content.contains("Enabled"));
+        assert!(content.contains("AES256"));
+    }
+
+    #[test]
+    fn render_returns_no_settings_when_settings_tab_without_data() {
+        let objects: Vec<S3Object> = vec![];
+        let backend = TestBackend::new(80, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Settings,
+                    None,
+                    0,
+                    false,
+                    0,
+                    true,
+                    frame.area(),
+                )
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("No settings available"));
+    }
+
+    #[test]
+    fn render_returns_settings_loading_when_settings_tab_loading() {
+        let objects: Vec<S3Object> = vec![];
+        let backend = TestBackend::new(80, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Settings,
+                    None,
+                    0,
+                    true,
+                    0,
+                    true,
+                    frame.area(),
+                )
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Loading bucket settings..."));
+    }
+
+    #[test]
+    fn render_returns_settings_snapshot_when_settings_tab_rendered() {
+        let objects: Vec<S3Object> = vec![];
+        let settings = BucketSettings {
+            region: "us-west-2".to_string(),
+            versioning: "Suspended".to_string(),
+            encryption: "aws:kms".to_string(),
+        };
+        let backend = TestBackend::new(80, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    "my-prod-bucket",
+                    &objects,
+                    "",
+                    &S3DetailTab::Settings,
+                    Some(&settings),
+                    0,
+                    false,
+                    0,
+                    true,
                     frame.area(),
                 )
             })

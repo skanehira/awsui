@@ -3,27 +3,31 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Wrap};
 
-use crate::aws::ecr_model::{Image, Repository};
+use crate::aws::ecr_model::{EcrDetailTab, Image, ImageScanResult, Repository};
 use crate::tui::components::loading::Loading;
 use crate::tui::components::status_bar::StatusBar;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
 use crate::tui::theme;
 
-/// ECRリポジトリ詳細画面を描画する（イメージ一覧）
+/// ECRリポジトリ詳細画面を描画する（イメージ一覧 / スキャン結果 / ライフサイクルポリシー）
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
     repository: &Repository,
     images: &[Image],
+    detail_tab: &EcrDetailTab,
+    lifecycle_policy: Option<&str>,
+    scan_result: Option<&ImageScanResult>,
     selected_index: usize,
     loading: bool,
     spinner_tick: usize,
     profile: Option<&str>,
     region: Option<&str>,
+    can_delete: bool,
     area: Rect,
 ) {
     let outer_chunks = Layout::vertical([
-        Constraint::Min(1),    // 外枠（リポジトリ情報 + イメージテーブル）
+        Constraint::Min(1),    // 外枠（リポジトリ情報 + コンテンツ）
         Constraint::Length(1), // ステータスバー
     ])
     .split(area);
@@ -39,26 +43,54 @@ pub fn render(
     let inner = outer_block.inner(outer_chunks[0]);
     frame.render_widget(outer_block, outer_chunks[0]);
 
-    // 内側レイアウト: リポジトリ情報 + イメージテーブル
+    // 内側レイアウト: リポジトリ情報 + タブバー + コンテンツ
     let inner_chunks = Layout::vertical([
         Constraint::Length(4), // リポジトリ情報
-        Constraint::Min(1),    // イメージテーブル
+        Constraint::Length(1), // タブバー
+        Constraint::Min(1),    // コンテンツ
     ])
     .split(inner);
 
     // リポジトリ情報
     render_repository_info(frame, repository, inner_chunks[0]);
 
-    // イメージテーブル
-    if loading {
-        let loading_widget = Loading::new("Loading images...", spinner_tick);
-        frame.render_widget(loading_widget, inner_chunks[1]);
-    } else {
-        render_image_table(frame, images, selected_index, inner_chunks[1]);
+    // タブバー
+    render_tab_bar(frame, detail_tab, inner_chunks[1]);
+
+    // コンテンツ（タブに応じて切り替え）
+    match detail_tab {
+        EcrDetailTab::Images => {
+            if loading {
+                let loading_widget = Loading::new("Loading images...", spinner_tick);
+                frame.render_widget(loading_widget, inner_chunks[2]);
+            } else {
+                render_image_table(frame, images, selected_index, inner_chunks[2]);
+            }
+        }
+        EcrDetailTab::Scan => {
+            if loading {
+                let loading_widget = Loading::new("Loading scan results...", spinner_tick);
+                frame.render_widget(loading_widget, inner_chunks[2]);
+            } else {
+                render_scan_results(frame, scan_result, inner_chunks[2]);
+            }
+        }
+        EcrDetailTab::Lifecycle => {
+            if loading {
+                let loading_widget = Loading::new("Loading lifecycle policy...", spinner_tick);
+                frame.render_widget(loading_widget, inner_chunks[2]);
+            } else {
+                render_lifecycle_policy(frame, lifecycle_policy, inner_chunks[2]);
+            }
+        }
     }
 
     // ステータスバー
-    let keybinds = "j/k:move y:copy-digest Esc:back ?:help";
+    let keybinds = if can_delete {
+        "]/[:tab j/k:move y:copy-digest D:delete Esc:back ?:help"
+    } else {
+        "]/[:tab j/k:move y:copy-digest Esc:back ?:help"
+    };
     let status = StatusBar::new(keybinds);
     frame.render_widget(status, outer_chunks[1]);
 }
@@ -168,6 +200,119 @@ fn format_size(bytes: i64) -> String {
     }
 }
 
+/// タブバーを描画
+fn render_tab_bar(frame: &mut Frame, detail_tab: &EcrDetailTab, area: Rect) {
+    let style_for = |tab: EcrDetailTab| {
+        if *detail_tab == tab {
+            theme::active()
+        } else {
+            theme::inactive()
+        }
+    };
+    let tab_line = Line::from(vec![
+        Span::styled(" Images ", style_for(EcrDetailTab::Images)),
+        Span::raw(" | "),
+        Span::styled(" Scan ", style_for(EcrDetailTab::Scan)),
+        Span::raw(" | "),
+        Span::styled(" Lifecycle ", style_for(EcrDetailTab::Lifecycle)),
+    ]);
+    frame.render_widget(Paragraph::new(tab_line), area);
+}
+
+/// ライフサイクルポリシーを描画
+fn render_lifecycle_policy(frame: &mut Frame, policy: Option<&str>, area: Rect) {
+    match policy {
+        Some(json) => {
+            let para = Paragraph::new(json)
+                .block(
+                    Block::default()
+                        .title(" Lifecycle Policy ")
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false });
+            frame.render_widget(para, area);
+        }
+        None => {
+            let para = Paragraph::new("No lifecycle policy configured")
+                .block(
+                    Block::default()
+                        .title(" Lifecycle Policy ")
+                        .borders(Borders::ALL),
+                )
+                .alignment(Alignment::Center);
+            frame.render_widget(para, area);
+        }
+    }
+}
+
+/// スキャン結果を描画
+fn render_scan_results(frame: &mut Frame, scan_result: Option<&ImageScanResult>, area: Rect) {
+    match scan_result {
+        Some(result) => {
+            let inner_chunks = Layout::vertical([
+                Constraint::Length(3), // サマリー（重大度カウント）
+                Constraint::Min(1),    // 脆弱性テーブル
+            ])
+            .split(area);
+
+            // 重大度カウントのサマリー
+            let summary_lines: Vec<String> = result
+                .severity_counts
+                .iter()
+                .map(|(sev, count)| format!("{}: {}", sev, count))
+                .collect();
+            let summary_text = if summary_lines.is_empty() {
+                "No vulnerabilities found".to_string()
+            } else {
+                summary_lines.join("  ")
+            };
+            let summary = Paragraph::new(summary_text)
+                .block(
+                    Block::default()
+                        .title(" Scan Summary ")
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false });
+            frame.render_widget(summary, inner_chunks[0]);
+
+            // 脆弱性テーブル
+            let headers = Row::new(vec!["Severity", "Name", "Description"]).style(theme::header());
+
+            let rows: Vec<Row> = result
+                .findings
+                .iter()
+                .map(|f| {
+                    Row::new(vec![
+                        Line::from(f.severity.to_string()),
+                        Line::from(f.name.as_str()),
+                        Line::from(f.description.as_str()),
+                    ])
+                })
+                .collect();
+
+            let widths = vec![
+                Constraint::Length(15),
+                Constraint::Length(25),
+                Constraint::Min(30),
+            ];
+
+            let table = SelectableTable::new(headers, rows, widths);
+            let widget = SelectableTableWidget::new(table, 0);
+            frame.render_widget(widget, inner_chunks[1]);
+        }
+        None => {
+            let para = Paragraph::new("No scan results available")
+                .block(
+                    Block::default()
+                        .title(" Scan Results ")
+                        .borders(Borders::ALL),
+                )
+                .alignment(Alignment::Center);
+            frame.render_widget(para, area);
+        }
+    }
+}
+
 /// 詳細画面の1行を生成
 fn detail_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
     Line::from(vec![
@@ -226,11 +371,15 @@ mod tests {
                     frame,
                     &repo,
                     &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
                     0,
                     false,
                     0,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    true,
                     frame.area(),
                 );
             })
@@ -248,7 +397,23 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -268,7 +433,23 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -293,7 +474,23 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -310,7 +507,23 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, true, 0, None, None, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
+                    0,
+                    true,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -325,7 +538,23 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
-            .draw(|frame| render(frame, &repo, &images, 0, false, 0, None, None, frame.area()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                )
+            })
             .unwrap();
 
         let content = buffer_to_string(&terminal);
@@ -346,11 +575,15 @@ mod tests {
                     frame,
                     &repo,
                     &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
                     0,
                     false,
                     0,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    true,
                     frame.area(),
                 );
             })
@@ -420,16 +653,282 @@ mod tests {
                     frame,
                     &repo,
                     &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
                     0,
                     false,
                     0,
                     Some("dev-account"),
                     Some("ap-northeast-1"),
+                    true,
                     frame.area(),
                 );
             })
             .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));
+    }
+
+    #[test]
+    fn render_returns_lifecycle_policy_when_lifecycle_tab() {
+        let repo = create_test_repository();
+        let images: Vec<Image> = vec![];
+        let policy = r#"{"rules":[{"rulePriority":1}]}"#;
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Lifecycle,
+                    Some(policy),
+                    None,
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Lifecycle Policy"));
+        assert!(content.contains("rulePriority"));
+    }
+
+    #[test]
+    fn render_returns_no_policy_message_when_lifecycle_tab_no_policy() {
+        let repo = create_test_repository();
+        let images: Vec<Image> = vec![];
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Lifecycle,
+                    None,
+                    None,
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Lifecycle Policy"));
+        assert!(content.contains("No lifecycle policy configured"));
+    }
+
+    #[test]
+    fn render_returns_scan_results_when_scan_tab_with_findings() {
+        use crate::aws::ecr_model::{FindingSeverity, ScanFinding};
+        let repo = create_test_repository();
+        let images: Vec<Image> = vec![];
+        let scan = ImageScanResult {
+            findings: vec![ScanFinding {
+                name: "CVE-2024-1234".to_string(),
+                severity: FindingSeverity::High,
+                description: "Buffer overflow".to_string(),
+                uri: "https://example.com".to_string(),
+            }],
+            severity_counts: vec![(FindingSeverity::High, 1)],
+        };
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Scan,
+                    None,
+                    Some(&scan),
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Scan Summary"));
+        assert!(content.contains("HIGH: 1"));
+        assert!(content.contains("CVE-2024-1234"));
+        assert!(content.contains("Buffer overflow"));
+    }
+
+    #[test]
+    fn render_returns_no_scan_message_when_scan_tab_no_results() {
+        let repo = create_test_repository();
+        let images: Vec<Image> = vec![];
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Scan,
+                    None,
+                    None,
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Scan Results"));
+        assert!(content.contains("No scan results available"));
+    }
+
+    #[test]
+    fn render_returns_scan_loading_when_scan_tab_loading() {
+        let repo = create_test_repository();
+        let images: Vec<Image> = vec![];
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Scan,
+                    None,
+                    None,
+                    0,
+                    true,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Loading scan results..."));
+    }
+
+    #[test]
+    fn render_returns_scan_snapshot_when_scan_tab_rendered() {
+        use crate::aws::ecr_model::{FindingSeverity, ScanFinding};
+        let repo = create_test_repository();
+        let images: Vec<Image> = vec![];
+        let scan = ImageScanResult {
+            findings: vec![
+                ScanFinding {
+                    name: "CVE-2024-0001".to_string(),
+                    severity: FindingSeverity::Critical,
+                    description: "Remote code execution".to_string(),
+                    uri: "https://example.com/CVE-2024-0001".to_string(),
+                },
+                ScanFinding {
+                    name: "CVE-2024-0002".to_string(),
+                    severity: FindingSeverity::High,
+                    description: "Buffer overflow vulnerability".to_string(),
+                    uri: "https://example.com/CVE-2024-0002".to_string(),
+                },
+                ScanFinding {
+                    name: "CVE-2024-0003".to_string(),
+                    severity: FindingSeverity::Medium,
+                    description: "Information disclosure".to_string(),
+                    uri: "https://example.com/CVE-2024-0003".to_string(),
+                },
+            ],
+            severity_counts: vec![
+                (FindingSeverity::Critical, 1),
+                (FindingSeverity::High, 1),
+                (FindingSeverity::Medium, 1),
+            ],
+        };
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Scan,
+                    None,
+                    Some(&scan),
+                    0,
+                    false,
+                    0,
+                    Some("dev-account"),
+                    Some("ap-northeast-1"),
+                    true,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        insta::assert_snapshot!(buffer_to_string(&terminal));
+    }
+
+    #[test]
+    fn render_returns_tab_bar_when_images_tab() {
+        let repo = create_test_repository();
+        let images: Vec<Image> = vec![];
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &repo,
+                    &images,
+                    &EcrDetailTab::Images,
+                    None,
+                    None,
+                    0,
+                    false,
+                    0,
+                    None,
+                    None,
+                    true,
+                    frame.area(),
+                )
+            })
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("Images"));
+        assert!(content.contains("Lifecycle"));
     }
 }

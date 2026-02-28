@@ -3,6 +3,7 @@ source: src/tui/views/s3_detail.rs
 expression: buffer_to_string(&terminal)
 ---
 ┌ my-prod-bucket / logs/2025/ ──────────────────────────────────────────────── 3 objects ┐
+│ Objects  |  Settings                                                                   │
 │Key                                 Size         Last Modified          Storage Class   │
 │📁  sub/                             -            2025-01-15T10:30:00Z   STANDARD        │
 │📄  file1.log                        4.0 KB       2025-01-15T10:30:00Z   STANDARD        │
@@ -11,6 +12,5 @@ expression: buffer_to_string(&terminal)
 │                                                                                        │
 │                                                                                        │
 │                                                                                        │
-│                                                                                        │
 └────────────────────────────────────────────────────────────────────────────────────────┘
- j/k:move Enter:open Esc:back ?:help
+ j/k:move Enter:open d:download u:upload D:delete [/]:tab Esc:back ?:help

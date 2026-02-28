@@ -627,6 +627,9 @@ impl App {
             }
             Action::StartStop => self.handle_start_stop(),
             Action::Reboot => self.handle_reboot(),
+            Action::ForceDeploy => self.handle_force_deploy(),
+            Action::ScaleService => self.handle_scale_service(),
+            Action::StopTask => self.handle_stop_task(),
             Action::DismissMessage => self.dismiss_message(),
             Action::ShowHelp => self.show_help = true,
             Action::SwitchDetailTab => self.switch_detail_tab(),
@@ -636,6 +639,8 @@ impl App {
             Action::Create => self.handle_create(),
             Action::Delete => self.handle_delete(),
             Action::Edit => self.handle_edit(),
+            Action::Download => self.handle_download(),
+            Action::Upload => self.handle_upload(),
             Action::NextTab => self.switch_tab_next(),
             Action::PrevTab => self.switch_tab_prev(),
             Action::CloseTab => self.close_tab(),
@@ -660,6 +665,10 @@ impl App {
             Action::LogToggleAutoScroll => self.log_toggle_auto_scroll(),
             Action::LogSearchNext => self.log_search_next(),
             Action::LogSearchPrev => self.log_search_prev(),
+            Action::PreviewScrollDown => self.preview_scroll_down(),
+            Action::PreviewScrollUp => self.preview_scroll_up(),
+            Action::PreviewScrollToTop => self.preview_scroll_to_top(),
+            Action::PreviewScrollToBottom => self.preview_scroll_to_bottom(),
             Action::Noop
             | Action::ConfirmYes
             | Action::ConfirmNo
@@ -771,7 +780,7 @@ impl App {
                     true,
                     |tab, data| {
                         let is_empty = data.is_empty();
-                        if let ServiceData::Ec2 { instances } = &mut tab.data {
+                        if let ServiceData::Ec2 { instances, .. } = &mut tab.data {
                             instances.set_items(data);
                         }
                         is_empty
@@ -887,6 +896,42 @@ impl App {
                     false
                 });
             }
+            TabEvent::BucketSettingsLoaded(result) => {
+                self.handle_loaded_result(tab_id, result, None, false, |tab, settings| {
+                    if let ServiceData::S3 {
+                        bucket_settings, ..
+                    } = &mut tab.data
+                    {
+                        *bucket_settings = Some(Some(settings));
+                    }
+                    false
+                });
+            }
+            TabEvent::ObjectContentLoaded(result) => match result {
+                Ok(content) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                        if let ServiceData::S3 {
+                            object_preview,
+                            preview_scroll,
+                            ..
+                        } = &mut tab.data
+                        {
+                            *object_preview = Some(Some(content));
+                            *preview_scroll = 0;
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                        if let ServiceData::S3 { object_preview, .. } = &mut tab.data {
+                            *object_preview = None;
+                        }
+                    }
+                    self.show_message(MessageLevel::Error, "Preview Error", e.to_string());
+                }
+            },
             TabEvent::VpcsLoaded(result) => {
                 self.handle_loaded_result(
                     tab_id,
@@ -1062,6 +1107,60 @@ impl App {
                     self.show_message(MessageLevel::Error, "Error", e.to_string());
                 }
             },
+            TabEvent::SecurityGroupsLoaded(result) => match result {
+                Ok(sgs) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                        if let ServiceData::Ec2 {
+                            security_groups, ..
+                        } = &mut tab.data
+                        {
+                            *security_groups = sgs;
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::MetricsLoaded(result) => match result {
+                Ok(metric_results) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                        if let ServiceData::Ec2 { metrics, .. } = &mut tab.data {
+                            *metrics = metric_results;
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let Some(tab) = self.find_tab_mut(tab_id) {
+                        tab.loading = false;
+                    }
+                    self.show_message(MessageLevel::Error, "Error", e.to_string());
+                }
+            },
+            TabEvent::LifecyclePolicyLoaded(result) => {
+                self.handle_loaded_result(tab_id, result, None, false, |tab, policy| {
+                    if let ServiceData::Ecr {
+                        lifecycle_policy, ..
+                    } = &mut tab.data
+                    {
+                        *lifecycle_policy = Some(policy);
+                    }
+                    false
+                });
+            }
+            TabEvent::ScanResultLoaded(result) => {
+                self.handle_loaded_result(tab_id, result, None, false, |tab, scan| {
+                    if let ServiceData::Ecr { scan_result, .. } = &mut tab.data {
+                        *scan_result = Some(scan);
+                    }
+                    false
+                });
+            }
         }
     }
 
@@ -1134,6 +1233,49 @@ impl App {
     fn log_search_prev(&mut self) {
         if let Some(state) = self.active_log_state_mut() {
             state.search_prev();
+        }
+    }
+
+    fn preview_scroll_down(&mut self) {
+        if let Some(tab) = self.active_tab_mut()
+            && let crate::tab::ServiceData::S3 {
+                object_preview: Some(Some(content)),
+                preview_scroll,
+                ..
+            } = &mut tab.data
+        {
+            let max = content.body.lines().count().saturating_sub(1);
+            if *preview_scroll < max {
+                *preview_scroll += 1;
+            }
+        }
+    }
+
+    fn preview_scroll_up(&mut self) {
+        if let Some(tab) = self.active_tab_mut()
+            && let crate::tab::ServiceData::S3 { preview_scroll, .. } = &mut tab.data
+        {
+            *preview_scroll = preview_scroll.saturating_sub(1);
+        }
+    }
+
+    fn preview_scroll_to_top(&mut self) {
+        if let Some(tab) = self.active_tab_mut()
+            && let crate::tab::ServiceData::S3 { preview_scroll, .. } = &mut tab.data
+        {
+            *preview_scroll = 0;
+        }
+    }
+
+    fn preview_scroll_to_bottom(&mut self) {
+        if let Some(tab) = self.active_tab_mut()
+            && let crate::tab::ServiceData::S3 {
+                object_preview: Some(Some(content)),
+                preview_scroll,
+                ..
+            } = &mut tab.data
+        {
+            *preview_scroll = content.body.lines().count().saturating_sub(1);
         }
     }
 
@@ -1378,7 +1520,7 @@ impl App {
                 service_index,
                 task_index,
             }) => (*service_index, *task_index),
-            Some(crate::tab::EcsNavLevel::ServiceDetail { service_index }) => {
+            Some(crate::tab::EcsNavLevel::ServiceDetail { service_index, .. }) => {
                 (*service_index, tab.detail_tag_index)
             }
             _ => return SideEffect::None,
@@ -1439,6 +1581,74 @@ impl App {
             ));
         }
         SideEffect::None
+    }
+
+    /// ECSサービスのforce new deploymentを開始する。
+    /// 現在はServiceDetail画面のみ対応。ClusterDetail（サービス一覧）からの操作は将来対応予定。
+    fn handle_force_deploy(&mut self) {
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        if let crate::tab::ServiceData::Ecs {
+            services,
+            nav_level: Some(crate::tab::EcsNavLevel::ServiceDetail { service_index, .. }),
+            ..
+        } = &tab.data
+            && let Some(service) = services.get(*service_index)
+        {
+            let confirm = ConfirmAction::ForceDeployEcsService {
+                service_name: service.service_name.clone(),
+                cluster_arn: service.cluster_arn.clone(),
+            };
+            tab.mode = Mode::Confirm(confirm);
+        }
+    }
+
+    /// ECSサービスのdesired count変更フォームを表示する。
+    /// 現在はServiceDetail画面のみ対応。
+    fn handle_scale_service(&mut self) {
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        if let crate::tab::ServiceData::Ecs {
+            services,
+            nav_level: Some(crate::tab::EcsNavLevel::ServiceDetail { service_index, .. }),
+            ..
+        } = &tab.data
+            && let Some(service) = services.get(*service_index)
+        {
+            let current_count = service.desired_count.to_string();
+            tab.mode = Mode::Form(FormContext {
+                kind: FormKind::ScaleEcsService,
+                fields: vec![FormField {
+                    label: "Desired Count".to_string(),
+                    input: tui_input::Input::new(current_count),
+                    required: true,
+                }],
+                focused_field: 0,
+            });
+        }
+    }
+
+    fn handle_stop_task(&mut self) {
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        if let crate::tab::ServiceData::Ecs {
+            tasks,
+            nav_level: Some(crate::tab::EcsNavLevel::ServiceDetail { .. }),
+            ..
+        } = &tab.data
+        {
+            let idx = tab.selected_index;
+            if let Some(task) = tasks.get(idx) {
+                let confirm = ConfirmAction::StopEcsTask {
+                    task_arn: task.task_arn.clone(),
+                    cluster_arn: task.cluster_arn.clone(),
+                };
+                tab.mode = Mode::Confirm(confirm);
+            }
+        }
     }
 
     fn handle_reboot(&mut self) {

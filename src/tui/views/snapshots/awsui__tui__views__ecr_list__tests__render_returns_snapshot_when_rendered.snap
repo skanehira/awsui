@@ -16,4 +16,4 @@ expression: buffer_to_string(&terminal)
 │                                                                                                            │
 │                                                                                                            │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- j/k:move Enter:images /:filter ?:help Esc:back
+ j/k:move Enter:images c:create D:delete /:filter ?:help Esc:back

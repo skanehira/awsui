@@ -214,6 +214,61 @@ pub(crate) fn load_s3_objects(app: &App, clients: &Clients, tab_id: TabId) {
     }
 }
 
+pub(crate) fn load_object_content(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::S3 {
+        selected_bucket,
+        objects,
+        ..
+    } = &tab.data
+        && let Some(bucket_name) = selected_bucket
+        && let Some(obj) = objects.get(tab.detail_tag_index)
+        && !obj.is_prefix
+        && let Some(client) = &clients.s3
+    {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let bucket = bucket_name.clone();
+        let key = obj.key.clone();
+        tokio::spawn(async move {
+            let result = c.get_object(&bucket, &key).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::ObjectContentLoaded(result),
+                ))
+                .await;
+        });
+    }
+}
+
+pub(crate) fn load_bucket_settings(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::S3 {
+        selected_bucket, ..
+    } = &tab.data
+        && let Some(bucket_name) = selected_bucket
+        && let Some(client) = &clients.s3
+    {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let bucket = bucket_name.clone();
+        tokio::spawn(async move {
+            let result = c.get_bucket_settings(&bucket).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::BucketSettingsLoaded(result),
+                ))
+                .await;
+        });
+    }
+}
+
 pub(crate) fn refresh_list_data(app: &App, clients: &Clients, tab_id: TabId) {
     let Some(tab) = app.find_tab(tab_id) else {
         return;
@@ -308,6 +363,114 @@ pub(crate) fn load_ecs_log_configs(app: &App, clients: &Clients, tab_id: TabId) 
                 .send(AppEvent::TabEvent(
                     tab_id,
                     TabEvent::EcsLogConfigsLoaded(result),
+                ))
+                .await;
+        });
+    }
+}
+
+pub(crate) fn load_security_groups(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::Ec2 { instances, .. } = &tab.data
+        && let Some(instance) = instances.filtered.get(tab.selected_index)
+        && let Some(client) = &clients.ec2
+    {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let sg_ids: Vec<String> = instance.security_groups.clone();
+        tokio::spawn(async move {
+            let result = c.describe_security_groups(&sg_ids).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::SecurityGroupsLoaded(result),
+                ))
+                .await;
+        });
+    }
+}
+
+pub(crate) fn load_metrics(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::Ec2 { instances, .. } = &tab.data
+        && let Some(instance) = instances.filtered.get(tab.selected_index)
+        && let Some(client) = &clients.cloudwatch
+    {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let instance_id = instance.instance_id.clone();
+        tokio::spawn(async move {
+            let result = c.get_metric_data(&instance_id).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(tab_id, TabEvent::MetricsLoaded(result)))
+                .await;
+        });
+    }
+}
+
+pub(crate) fn load_lifecycle_policy(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::Ecr { repositories, .. } = &tab.data
+        && let Some(repo) = repositories.filtered.get(tab.selected_index)
+        && let Some(client) = &clients.ecr
+    {
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let repo_name = repo.repository_name.clone();
+        tokio::spawn(async move {
+            let result = c.get_lifecycle_policy(&repo_name).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::LifecyclePolicyLoaded(result),
+                ))
+                .await;
+        });
+    }
+}
+
+pub(crate) fn load_scan_result(app: &App, clients: &Clients, tab_id: TabId) {
+    let Some(tab) = app.find_tab(tab_id) else {
+        return;
+    };
+    if let awsui::tab::ServiceData::Ecr {
+        repositories,
+        images,
+        ..
+    } = &tab.data
+        && let Some(repo) = repositories.filtered.get(tab.selected_index)
+        && let Some(client) = &clients.ecr
+    {
+        // 先頭イメージのdigestでスキャン結果を取得
+        let Some(image) = images.first() else {
+            // イメージがない場合はスキャン結果なしで返す
+            let tx = app.event_tx.clone();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(AppEvent::TabEvent(
+                        tab_id,
+                        TabEvent::ScanResultLoaded(Ok(None)),
+                    ))
+                    .await;
+            });
+            return;
+        };
+        let tx = app.event_tx.clone();
+        let c = client.clone();
+        let repo_name = repo.repository_name.clone();
+        let digest = image.image_digest.clone();
+        tokio::spawn(async move {
+            let result = c.describe_image_scan_findings(&repo_name, &digest).await;
+            let _ = tx
+                .send(AppEvent::TabEvent(
+                    tab_id,
+                    TabEvent::ScanResultLoaded(result),
                 ))
                 .await;
         });

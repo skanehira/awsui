@@ -4,11 +4,11 @@ expression: buffer_to_string(&terminal)
 ---
 ┌ web-01 (i-0abc1234) ─────────────────────────── dev-account │ ap-northeast-1 ┐
 │ [Overview] [Tags] [Security Groups] [Metrics]                                │
-│Key                     Value                                                 │
-│Name                    web-01                                                │
-│env                     production                                            │
-│team                    backend                                               │
-│                                                                              │
+│ web-sg (sg-001)                                                              │
+│Direction  Protocol   Port Range   Source/Dest           Description          │
+│Inbound    tcp        443          0.0.0.0/0             HTTPS                │
+│Inbound    tcp        80           0.0.0.0/0             HTTP                 │
+│Outbound   -1         All          0.0.0.0/0                                  │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -21,4 +21,4 @@ expression: buffer_to_string(&terminal)
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- ]/[:switch-tab y:copy-value Esc:back ?:help
+ ]/[:switch-tab j/k:select Enter:show-rules Esc:back ?:help

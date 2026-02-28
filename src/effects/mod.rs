@@ -13,8 +13,9 @@ use awsui::aws::secrets_client::SecretsClient;
 use awsui::aws::vpc_client::VpcClient;
 #[cfg(not(feature = "mock-data"))]
 use awsui::aws::{
-    client::AwsEc2Client, ecr_client::AwsEcrClient, ecs_client::AwsEcsClient,
-    s3_client::AwsS3Client, secrets_client::AwsSecretsClient, vpc_client::AwsVpcClient,
+    client::AwsEc2Client, cloudwatch_client::AwsCloudWatchClient, ecr_client::AwsEcrClient,
+    ecs_client::AwsEcsClient, s3_client::AwsS3Client, secrets_client::AwsSecretsClient,
+    vpc_client::AwsVpcClient,
 };
 use awsui::event::{AppEvent, TabEvent};
 use awsui::service::ServiceKind;
@@ -22,8 +23,9 @@ use awsui::tab::{TabId, TabView};
 
 use crate::clients::Clients;
 use crate::loader::{
-    load_detail_data, load_ecs_log_configs, load_ecs_tasks, load_instances, load_s3_objects,
-    load_secret_value, refresh_list_data,
+    load_bucket_settings, load_detail_data, load_ecs_log_configs, load_ecs_tasks, load_instances,
+    load_lifecycle_policy, load_metrics, load_object_content, load_s3_objects, load_scan_result,
+    load_secret_value, load_security_groups, refresh_list_data,
 };
 
 // サブモジュールの関数を再公開
@@ -56,6 +58,18 @@ enum DataLoadAction {
     NavigateVpcLink(TabId),
     /// シークレット値取得
     LoadSecretValue(TabId),
+    /// EC2 セキュリティグループ読み込み
+    LoadSecurityGroups(TabId),
+    /// EC2 CloudWatchメトリクス読み込み
+    LoadMetrics(TabId),
+    /// ECRライフサイクルポリシー読み込み
+    LoadLifecyclePolicy(TabId),
+    /// ECRイメージスキャン結果読み込み
+    LoadScanResult(TabId),
+    /// S3オブジェクトコンテンツ読み込み（プレビュー）
+    LoadObjectContent(TabId),
+    /// S3バケット設定読み込み
+    LoadBucketSettings(TabId),
     /// リスト画面でのリフレッシュ
     RefreshListData(TabId),
     /// データ読み込み不要
@@ -105,7 +119,12 @@ fn determine_data_load_action(
     }
 
     // ディテールビューに遷移した場合
-    if tab_loading && tab_view == awsui::tab::TabView::Detail {
+    // 明示的な副作用（FormSubmit等）がある場合はデータリロードをスキップし、
+    // 副作用を優先して処理する
+    if tab_loading
+        && tab_view == awsui::tab::TabView::Detail
+        && matches!(side_effect, SideEffect::None)
+    {
         let was_list = prev_view.as_ref().is_some_and(is_list_view);
         let was_same_detail = prev_view.as_ref().is_some_and(is_detail_view);
 
@@ -116,8 +135,51 @@ fn determine_data_load_action(
         if was_same_detail {
             let current_view = app.current_view();
             return match current_view {
+                Some((ServiceKind::Ec2, TabView::Detail)) => {
+                    if tab.detail_tab == awsui::app::DetailTab::Metrics {
+                        DataLoadAction::LoadMetrics(tab_id)
+                    } else {
+                        DataLoadAction::LoadSecurityGroups(tab_id)
+                    }
+                }
+                Some((ServiceKind::Ecr, TabView::Detail)) => {
+                    if let awsui::tab::ServiceData::Ecr { detail_tab, .. } = &tab.data {
+                        match detail_tab {
+                            awsui::aws::ecr_model::EcrDetailTab::Lifecycle => {
+                                DataLoadAction::LoadLifecyclePolicy(tab_id)
+                            }
+                            awsui::aws::ecr_model::EcrDetailTab::Scan => {
+                                DataLoadAction::LoadScanResult(tab_id)
+                            }
+                            _ => DataLoadAction::None,
+                        }
+                    } else {
+                        DataLoadAction::None
+                    }
+                }
                 Some((ServiceKind::Ecs, TabView::Detail)) => DataLoadAction::LoadEcsTasks(tab_id),
-                Some((ServiceKind::S3, TabView::Detail)) => DataLoadAction::LoadS3Objects(tab_id),
+                Some((ServiceKind::S3, TabView::Detail)) => {
+                    if let awsui::tab::ServiceData::S3 {
+                        detail_tab,
+                        object_preview,
+                        ..
+                    } = &tab.data
+                    {
+                        // object_preview が Some(None) = ロード中の場合はオブジェクトコンテンツ取得
+                        if matches!(object_preview, Some(None)) {
+                            DataLoadAction::LoadObjectContent(tab_id)
+                        } else {
+                            match detail_tab {
+                                awsui::aws::s3_model::S3DetailTab::Settings => {
+                                    DataLoadAction::LoadBucketSettings(tab_id)
+                                }
+                                _ => DataLoadAction::LoadS3Objects(tab_id),
+                            }
+                        }
+                    } else {
+                        DataLoadAction::None
+                    }
+                }
                 Some((ServiceKind::Vpc, TabView::Detail)) => {
                     DataLoadAction::NavigateVpcLink(tab_id)
                 }
@@ -200,6 +262,30 @@ pub(crate) async fn handle_side_effects(
             load_secret_value(app, clients, tab_id);
             return;
         }
+        DataLoadAction::LoadSecurityGroups(tab_id) => {
+            load_security_groups(app, clients, tab_id);
+            return;
+        }
+        DataLoadAction::LoadMetrics(tab_id) => {
+            load_metrics(app, clients, tab_id);
+            return;
+        }
+        DataLoadAction::LoadLifecyclePolicy(tab_id) => {
+            load_lifecycle_policy(app, clients, tab_id);
+            return;
+        }
+        DataLoadAction::LoadScanResult(tab_id) => {
+            load_scan_result(app, clients, tab_id);
+            return;
+        }
+        DataLoadAction::LoadObjectContent(tab_id) => {
+            load_object_content(app, clients, tab_id);
+            return;
+        }
+        DataLoadAction::LoadBucketSettings(tab_id) => {
+            load_bucket_settings(app, clients, tab_id);
+            return;
+        }
         DataLoadAction::RefreshListData(tab_id) => {
             refresh_list_data(app, clients, tab_id);
             return;
@@ -214,10 +300,10 @@ pub(crate) async fn handle_side_effects(
 
     match side_effect {
         SideEffect::Confirm(action) => {
-            if let Some(client) = clients.ec2.clone() {
-                let tx = app.event_tx.clone();
-                match action {
-                    ConfirmAction::Start(id) => {
+            let tx = app.event_tx.clone();
+            match action {
+                ConfirmAction::Start(id) => {
+                    if let Some(client) = clients.ec2.clone() {
                         tokio::spawn(async move {
                             let result = client.start_instances(std::slice::from_ref(&id)).await;
                             let event = match result {
@@ -235,7 +321,9 @@ pub(crate) async fn handle_side_effects(
                             let _ = tx.send(event).await;
                         });
                     }
-                    ConfirmAction::Stop(id) => {
+                }
+                ConfirmAction::Stop(id) => {
+                    if let Some(client) = clients.ec2.clone() {
                         tokio::spawn(async move {
                             let result = client.stop_instances(std::slice::from_ref(&id)).await;
                             let event = match result {
@@ -253,7 +341,9 @@ pub(crate) async fn handle_side_effects(
                             let _ = tx.send(event).await;
                         });
                     }
-                    ConfirmAction::Reboot(id) => {
+                }
+                ConfirmAction::Reboot(id) => {
+                    if let Some(client) = clients.ec2.clone() {
                         tokio::spawn(async move {
                             let result = client.reboot_instances(std::slice::from_ref(&id)).await;
                             let event = match result {
@@ -262,6 +352,54 @@ pub(crate) async fn handle_side_effects(
                                     TabEvent::ActionCompleted(Ok(format!(
                                         "Instance {} rebooted",
                                         id
+                                    ))),
+                                ),
+                                Err(e) => {
+                                    AppEvent::TabEvent(tab_id, TabEvent::ActionCompleted(Err(e)))
+                                }
+                            };
+                            let _ = tx.send(event).await;
+                        });
+                    }
+                }
+                ConfirmAction::ForceDeployEcsService {
+                    service_name,
+                    cluster_arn,
+                } => {
+                    if let Some(client) = clients.ecs.clone() {
+                        tokio::spawn(async move {
+                            let result = client
+                                .update_service(&cluster_arn, &service_name, true)
+                                .await;
+                            let event = match result {
+                                Ok(()) => AppEvent::TabEvent(
+                                    tab_id,
+                                    TabEvent::ActionCompleted(Ok(format!(
+                                        "Force new deployment started for {}",
+                                        service_name
+                                    ))),
+                                ),
+                                Err(e) => {
+                                    AppEvent::TabEvent(tab_id, TabEvent::ActionCompleted(Err(e)))
+                                }
+                            };
+                            let _ = tx.send(event).await;
+                        });
+                    }
+                }
+                ConfirmAction::StopEcsTask {
+                    task_arn,
+                    cluster_arn,
+                } => {
+                    if let Some(client) = clients.ecs.clone() {
+                        tokio::spawn(async move {
+                            let result = client.stop_task(&cluster_arn, &task_arn).await;
+                            let event = match result {
+                                Ok(()) => AppEvent::TabEvent(
+                                    tab_id,
+                                    TabEvent::ActionCompleted(Ok(format!(
+                                        "Task {} stopped",
+                                        task_arn
                                     ))),
                                 ),
                                 Err(e) => {
@@ -307,6 +445,7 @@ async fn create_client_and_load(app: &mut App, clients: &mut Clients, tab_id: Ta
             let client: Arc<dyn Ec2Client> = Arc::new(MockEc2ClientImpl);
             load_instances(&app.event_tx, client.clone(), tab_id);
             clients.ec2 = Some(client);
+            clients.cloudwatch = Some(Arc::new(MockCloudWatchClientImpl));
         }
         awsui::service::ServiceKind::Ecr => {
             let client: Arc<dyn EcrClient> = Arc::new(MockEcrClientImpl);
@@ -403,6 +542,12 @@ async fn create_client_and_load(app: &mut App, clients: &mut Clients, tab_id: Ta
                 let client: Arc<dyn Ec2Client> = Arc::new(client);
                 load_instances(&app.event_tx, client.clone(), tab_id);
                 clients.ec2 = Some(client);
+                // CloudWatchクライアントもEC2と同時に作成
+                if let Ok(cw) = AwsCloudWatchClient::new(profile_name, &region).await {
+                    clients.cloudwatch =
+                        Some(Arc::new(cw)
+                            as Arc<dyn awsui::aws::cloudwatch_client::CloudWatchClient>);
+                }
             }
             Err(e) => handle_client_error(app, tab_id, e),
         },
@@ -803,5 +948,67 @@ mod tests {
             &Action::Enter,
         );
         assert_eq!(result, DataLoadAction::None);
+    }
+
+    #[test]
+    fn determine_returns_load_security_groups_when_ec2_detail_to_detail_sg_tab() {
+        let mut app = App::new("dev".to_string(), None);
+        app.create_tab(ServiceKind::Ec2);
+        let tab_id = app.active_tab().unwrap().id;
+        if let Some(tab) = app.active_tab_mut() {
+            tab.tab_view = TabView::Detail;
+            tab.detail_tab = awsui::app::DetailTab::SecurityGroups;
+            tab.loading = true;
+        }
+        let result = determine_data_load_action(
+            &app,
+            &SideEffect::None,
+            &Some((ServiceKind::Ec2, TabView::Detail)),
+            Some(tab_id),
+            &Action::SwitchDetailTab,
+        );
+        assert_eq!(result, DataLoadAction::LoadSecurityGroups(tab_id));
+    }
+
+    #[test]
+    fn determine_returns_load_metrics_when_ec2_detail_to_detail_metrics_tab() {
+        let mut app = App::new("dev".to_string(), None);
+        app.create_tab(ServiceKind::Ec2);
+        let tab_id = app.active_tab().unwrap().id;
+        if let Some(tab) = app.active_tab_mut() {
+            tab.tab_view = TabView::Detail;
+            tab.detail_tab = awsui::app::DetailTab::Metrics;
+            tab.loading = true;
+        }
+        let result = determine_data_load_action(
+            &app,
+            &SideEffect::None,
+            &Some((ServiceKind::Ec2, TabView::Detail)),
+            Some(tab_id),
+            &Action::SwitchDetailTab,
+        );
+        assert_eq!(result, DataLoadAction::LoadMetrics(tab_id));
+    }
+
+    #[test]
+    fn determine_returns_load_object_content_when_s3_detail_preview_loading() {
+        let mut app = App::new("dev".to_string(), None);
+        app.create_tab(ServiceKind::S3);
+        let tab_id = app.active_tab().unwrap().id;
+        if let Some(tab) = app.active_tab_mut() {
+            tab.tab_view = TabView::Detail;
+            tab.loading = true;
+            if let awsui::tab::ServiceData::S3 { object_preview, .. } = &mut tab.data {
+                *object_preview = Some(None); // ロード中
+            }
+        }
+        let result = determine_data_load_action(
+            &app,
+            &SideEffect::None,
+            &Some((ServiceKind::S3, TabView::Detail)),
+            Some(tab_id),
+            &Action::Enter,
+        );
+        assert_eq!(result, DataLoadAction::LoadObjectContent(tab_id));
     }
 }

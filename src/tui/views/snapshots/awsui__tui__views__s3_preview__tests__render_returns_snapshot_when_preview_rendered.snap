@@ -1,0 +1,19 @@
+---
+source: src/tui/views/s3_preview.rs
+expression: buffer_to_string(&terminal)
+---
+┌ Preview: config.json ────────────────────────────────────┐
+│Type: application/json  Size: 42 B                        │
+│──────────────────────────────────────────────────────────│
+│   1 {                                                    │
+│   2   "name": "test",                                    │
+│   3   "version": "1.0.0"                                 │
+│   4 }                                                    │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+ j/k:scroll g/G:top/bottom Esc:back ?:help

@@ -76,10 +76,12 @@ pub fn render(
 
     // ステータスバー
     let keybinds = match detail_tab {
-        SecretsDetailTab::Overview => "[/]:switch-tab v:show/hide-value y:copy-arn Esc:back",
-        SecretsDetailTab::Rotation => "[/]:switch-tab y:copy-arn Esc:back",
-        SecretsDetailTab::Versions => "[/]:switch-tab y:copy-arn Esc:back",
-        SecretsDetailTab::Tags => "[/]:switch-tab y:copy-value Esc:back",
+        SecretsDetailTab::Overview => {
+            "[/]:switch-tab v:show/hide-value e:edit y:copy-arn Esc:back ?:help"
+        }
+        SecretsDetailTab::Rotation => "[/]:switch-tab y:copy-arn Esc:back ?:help",
+        SecretsDetailTab::Versions => "[/]:switch-tab y:copy-arn Esc:back ?:help",
+        SecretsDetailTab::Tags => "[/]:switch-tab y:copy-value Esc:back ?:help",
     };
     let status = StatusBar::new(keybinds);
     frame.render_widget(status, outer_chunks[1]);

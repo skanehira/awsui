@@ -3,7 +3,7 @@ source: src/tui/views/ec2_detail.rs
 expression: buffer_to_string(&terminal)
 ---
 ┌ web-01 (i-0abc1234) ─────────────────────────── dev-account │ ap-northeast-1 ┐
-│ [Overview] [Tags]                                                            │
+│ [Overview] [Tags] [Security Groups] [Metrics]                                │
 │┌ Instance ───────────────────────────┐┌ Network ────────────────────────────┐│
 ││  ID          i-0abc1234             ││  VPC         vpc-abc123 →           ││
 ││  Name        web-01                 ││  Subnet      subnet-def456 →        ││
@@ -26,4 +26,4 @@ expression: buffer_to_string(&terminal)
 ││                                                                            ││
 │└────────────────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────────────┘
- Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot s:ssm-connect
+ ]/[:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot s:ssm-connect

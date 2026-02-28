@@ -69,7 +69,7 @@ pub fn render(frame: &mut Frame, props: &VpcListProps, area: Rect) {
         outer_chunks[1],
         mode,
         filter_input.value(),
-        "j/k:move Enter:detail /:filter ?:help",
+        "j/k:move Enter:detail /:filter ?:help Esc:back",
     );
 }
 

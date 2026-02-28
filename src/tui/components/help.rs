@@ -11,20 +11,20 @@ use crate::tui::theme;
 /// ヘルプポップアップWidget
 pub struct HelpPopup {
     view: (ServiceKind, TabView),
+    can_delete: bool,
 }
 
 impl HelpPopup {
-    pub fn new(view: (ServiceKind, TabView)) -> Self {
-        Self { view }
+    pub fn new(view: (ServiceKind, TabView), can_delete: bool) -> Self {
+        Self { view, can_delete }
     }
 
     fn action_lines(&self) -> Vec<Line<'static>> {
-        match self.view {
+        let mut lines = match self.view {
             (ServiceKind::Ec2, TabView::List) => vec![
                 Line::from("    S          Start/Stop instance"),
                 Line::from("    R          Reboot instance"),
                 Line::from("    s          SSM Connect"),
-                Line::from("    D          Terminate instance"),
                 Line::from("    r          Refresh list"),
                 Line::from("    y          Copy ID"),
                 Line::from("    /          Filter"),
@@ -34,45 +34,82 @@ impl HelpPopup {
                 Line::from("    R          Reboot instance"),
                 Line::from("    s          SSM Connect"),
                 Line::from("    y          Copy ID"),
-                Line::from("    ]          Switch tab"),
+                Line::from("    [/]        Switch tab"),
                 Line::from("    Enter      Follow link"),
             ],
             (ServiceKind::S3, TabView::List) => vec![
                 Line::from("    c          Create bucket"),
-                Line::from("    D          Delete bucket"),
                 Line::from("    r          Refresh list"),
                 Line::from("    y          Copy ID"),
                 Line::from("    /          Filter"),
             ],
             (ServiceKind::S3, TabView::Detail) => vec![
                 Line::from("    Enter      Open directory"),
-                Line::from("    D          Delete object"),
+                Line::from("    d          Download object"),
+                Line::from("    u          Upload object"),
+                Line::from("    [/]        Switch tab"),
             ],
             (ServiceKind::SecretsManager, TabView::List) => vec![
                 Line::from("    c          Create secret"),
-                Line::from("    D          Delete secret"),
                 Line::from("    r          Refresh list"),
                 Line::from("    y          Copy ID"),
                 Line::from("    /          Filter"),
             ],
             (ServiceKind::SecretsManager, TabView::Detail) => vec![
                 Line::from("    e          Edit secret value"),
+                Line::from("    v          Show/hide value"),
                 Line::from("    y          Copy ID"),
-                Line::from("    ]          Switch tab"),
+                Line::from("    [/]        Switch tab"),
             ],
-            (ServiceKind::Ecr, TabView::List)
-            | (ServiceKind::Ecs, TabView::List)
-            | (ServiceKind::Vpc, TabView::List) => vec![
+            (ServiceKind::Ecr, TabView::List) => vec![
+                Line::from("    c          Create repository"),
                 Line::from("    r          Refresh list"),
                 Line::from("    y          Copy ID"),
                 Line::from("    /          Filter"),
             ],
-            (ServiceKind::Ecr, TabView::Detail)
-            | (ServiceKind::Ecs, TabView::Detail)
-            | (ServiceKind::Vpc, TabView::Detail) => {
+            (ServiceKind::Ecs, TabView::List) | (ServiceKind::Vpc, TabView::List) => vec![
+                Line::from("    r          Refresh list"),
+                Line::from("    y          Copy ID"),
+                Line::from("    /          Filter"),
+            ],
+            (ServiceKind::Ecr, TabView::Detail) => vec![
+                Line::from("    y          Copy digest"),
+                Line::from("    [/]        Switch tab"),
+            ],
+            (ServiceKind::Ecs, TabView::Detail) => vec![
+                Line::from("    d          Force deploy"),
+                Line::from("    s          Scale service"),
+                Line::from("    x          Stop task"),
+                Line::from("    l          Show logs"),
+                Line::from("    a          Exec into container"),
+                Line::from("    y          Copy ID"),
+                Line::from("    [/]        Switch tab"),
+                Line::from("    Enter      Open detail"),
+            ],
+            (ServiceKind::Vpc, TabView::Detail) => {
                 vec![Line::from("    y          Copy ID")]
             }
+        };
+
+        // 削除許可がある場合のみ削除キーを表示
+        if self.can_delete {
+            let delete_line = match self.view {
+                (ServiceKind::Ec2, TabView::List) => Some("    D          Terminate instance"),
+                (ServiceKind::S3, TabView::List) => Some("    D          Delete bucket"),
+                (ServiceKind::S3, TabView::Detail) => Some("    D          Delete object"),
+                (ServiceKind::SecretsManager, TabView::List) => {
+                    Some("    D          Delete secret")
+                }
+                (ServiceKind::Ecr, TabView::List) => Some("    D          Delete repository"),
+                (ServiceKind::Ecr, TabView::Detail) => Some("    D          Delete image"),
+                _ => None,
+            };
+            if let Some(line) = delete_line {
+                lines.push(Line::from(line));
+            }
         }
+
+        lines
     }
 }
 
@@ -134,9 +171,9 @@ mod tests {
     use crate::tab::TabView;
 
     fn render_help(view: (ServiceKind, TabView)) -> String {
-        let area = Rect::new(0, 0, 80, 30);
+        let area = Rect::new(0, 0, 80, 40);
         let mut buf = Buffer::empty(area);
-        HelpPopup::new(view).render(area, &mut buf);
+        HelpPopup::new(view, true).render(area, &mut buf);
 
         let mut result = String::new();
         for y in 0..area.height {
@@ -217,21 +254,35 @@ mod tests {
         assert!(!content.contains("Reboot"));
     }
 
-    // Secrets Detail: e(Edit), y, ](Switch tab)
+    // Secrets Detail: e(Edit), v(Show/hide), y, [/](Switch tab)
     #[test]
     fn help_popup_render_returns_secrets_detail_actions_when_secrets_detail() {
         let content = render_help((ServiceKind::SecretsManager, TabView::Detail));
         assert!(content.contains("Edit"));
+        assert!(content.contains("Show/hide"));
         assert!(content.contains("Copy"));
-        assert!(content.contains("]"));
+        assert!(content.contains("[/]"));
         assert!(!content.contains("Start/Stop"));
         assert!(!content.contains("Filter"));
     }
 
-    // Generic List (ECR, ECS, VPC): r, y, /のみ
+    // ECR List: c(Create), D(Delete), r, y, /
     #[test]
-    fn help_popup_render_returns_generic_actions_when_ecr_list() {
+    fn help_popup_render_returns_ecr_actions_when_ecr_list() {
         let content = render_help((ServiceKind::Ecr, TabView::List));
+        assert!(content.contains("Create"));
+        assert!(content.contains("Delete"));
+        assert!(content.contains("Refresh"));
+        assert!(content.contains("Copy"));
+        assert!(content.contains("Filter"));
+        assert!(!content.contains("Start/Stop"));
+        assert!(!content.contains("Reboot"));
+    }
+
+    // Generic List (ECS, VPC): r, y, /のみ
+    #[test]
+    fn help_popup_render_returns_generic_actions_when_ecs_list() {
+        let content = render_help((ServiceKind::Ecs, TabView::List));
         assert!(content.contains("Refresh"));
         assert!(content.contains("Copy"));
         assert!(content.contains("Filter"));
@@ -241,24 +292,53 @@ mod tests {
         assert!(!content.contains("Delete"));
     }
 
-    // S3 Detail: Enter(open dir), D(Delete)
+    // S3 Detail: Enter(open dir), d(Download), u(Upload), D(Delete), [/](Switch tab)
     #[test]
     fn help_popup_render_returns_s3_detail_actions_when_s3_detail() {
         let content = render_help((ServiceKind::S3, TabView::Detail));
         assert!(content.contains("Open"));
+        assert!(content.contains("Download"));
+        assert!(content.contains("Upload"));
         assert!(content.contains("Delete"));
+        assert!(content.contains("[/]"));
         assert!(!content.contains("Start/Stop"));
         assert!(!content.contains("Filter"));
     }
 
-    // Generic Detail (ECR, ECS, VPC): y のみ
+    // ECR Detail: D(Delete), y(Copy digest), [/](Switch tab)
     #[test]
-    fn help_popup_render_returns_generic_detail_actions_when_ecr_detail() {
+    fn help_popup_render_returns_ecr_detail_actions_when_ecr_detail() {
         let content = render_help((ServiceKind::Ecr, TabView::Detail));
-        assert!(content.contains("Copy"));
+        assert!(content.contains("Delete"));
+        assert!(content.contains("Copy digest"));
+        assert!(content.contains("[/]"));
         assert!(!content.contains("Start/Stop"));
         assert!(!content.contains("Filter"));
         assert!(!content.contains("Create"));
+    }
+
+    // ECS Detail: d(Force deploy), s(Scale), x(Stop task), l(Logs), a(Exec), y, [/], Enter
+    #[test]
+    fn help_popup_render_returns_ecs_detail_actions_when_ecs_detail() {
+        let content = render_help((ServiceKind::Ecs, TabView::Detail));
+        assert!(content.contains("Force deploy"));
+        assert!(content.contains("Scale service"));
+        assert!(content.contains("Stop task"));
+        assert!(content.contains("Show logs"));
+        assert!(content.contains("Exec into container"));
+        assert!(content.contains("Copy ID"));
+        assert!(content.contains("[/]"));
+        assert!(content.contains("Open detail"));
+        assert!(!content.contains("Start/Stop"));
+        assert!(!content.contains("Filter"));
+    }
+
+    // VPC Detail: y のみ
+    #[test]
+    fn help_popup_render_returns_vpc_detail_actions_when_vpc_detail() {
+        let content = render_help((ServiceKind::Vpc, TabView::Detail));
+        assert!(content.contains("Copy ID"));
+        assert!(!content.contains("Start/Stop"));
         assert!(!content.contains("Delete"));
     }
 }

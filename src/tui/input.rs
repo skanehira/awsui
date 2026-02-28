@@ -72,14 +72,16 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
 
     // View別のハンドリング
     let mode = &tab.mode;
-    match (tab.service, tab.tab_view) {
+    let action = match (tab.service, tab.tab_view) {
         (ServiceKind::Ec2, TabView::List) => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_ec2_list_key(key),
         },
-        (ServiceKind::Ecr, TabView::List)
-        | (ServiceKind::Ecs, TabView::List)
-        | (ServiceKind::Vpc, TabView::List) => match mode {
+        (ServiceKind::Ecr, TabView::List) => match mode {
+            Mode::Filter => handle_filter_key(key),
+            _ => handle_ecr_list_key(key),
+        },
+        (ServiceKind::Ecs, TabView::List) | (ServiceKind::Vpc, TabView::List) => match mode {
             Mode::Filter => handle_filter_key(key),
             _ => handle_generic_list_key(key),
         },
@@ -92,9 +94,8 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
             _ => handle_secrets_list_key(key),
         },
         (ServiceKind::Ec2, TabView::Detail) => handle_ec2_detail_key(key),
-        (ServiceKind::Ecr, TabView::Detail) | (ServiceKind::Vpc, TabView::Detail) => {
-            handle_generic_detail_key(key)
-        }
+        (ServiceKind::Ecr, TabView::Detail) => handle_ecr_detail_key(key),
+        (ServiceKind::Vpc, TabView::Detail) => handle_generic_detail_key(key),
         (ServiceKind::Ecs, TabView::Detail) => {
             // ログビュー表示中は専用ハンドラー
             if let crate::tab::ServiceData::Ecs {
@@ -109,9 +110,22 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
             }
             handle_ecs_detail_key(key)
         }
-        (ServiceKind::S3, TabView::Detail) => handle_s3_detail_key(key),
+        (ServiceKind::S3, TabView::Detail) => {
+            // プレビューモード中は専用ハンドラー
+            if tab.is_in_s3_preview() {
+                return handle_s3_preview_key(key);
+            }
+            handle_s3_detail_key(key)
+        }
         (ServiceKind::SecretsManager, TabView::Detail) => handle_secrets_detail_key(key),
+    };
+
+    // 削除操作は --allow-delete 未指定のサービスでは無効化
+    if action == Action::Delete && !app.delete_permissions.can_delete(tab.service.cli_name()) {
+        return Action::Noop;
     }
+
+    action
 }
 
 /// 確認ダイアログのキー処理
@@ -239,9 +253,18 @@ fn handle_ec2_list_key(key: KeyEvent) -> Action {
     }
 }
 
-/// 汎用リストビュー(Normalモード)のキー処理 (ECR, ECS, VPC)
+/// 汎用リストビュー(Normalモード)のキー処理 (ECS, VPC)
 fn handle_generic_list_key(key: KeyEvent) -> Action {
     handle_common_list_key(key)
+}
+
+/// ECRリストビュー(Normalモード)のキー処理
+fn handle_ecr_list_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('c') => Action::Create,
+        KeyCode::Char('D') => Action::Delete,
+        _ => handle_common_list_key(key),
+    }
 }
 
 /// S3一覧画面(Normalモード)のキー処理
@@ -304,6 +327,7 @@ fn handle_ecs_detail_key(key: KeyEvent) -> Action {
         return Action::Quit;
     }
     match key.code {
+        KeyCode::Char(']') => Action::SwitchDetailTab,
         KeyCode::Char('[') => Action::PrevDetailTab,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
@@ -312,6 +336,9 @@ fn handle_ecs_detail_key(key: KeyEvent) -> Action {
         KeyCode::Enter => Action::Enter,
         KeyCode::Char('l') => Action::ShowLogs,
         KeyCode::Char('a') => Action::EcsExec,
+        KeyCode::Char('d') => Action::ForceDeploy,
+        KeyCode::Char('s') => Action::ScaleService,
+        KeyCode::Char('x') => Action::StopTask,
         KeyCode::Char('y') => Action::CopyId,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
@@ -383,21 +410,60 @@ fn handle_generic_detail_key(key: KeyEvent) -> Action {
     }
 }
 
+/// ECR詳細画面（イメージ一覧 / ライフサイクルポリシー）のキー処理
+fn handle_ecr_detail_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char(']') => Action::SwitchDetailTab,
+        KeyCode::Char('D') => Action::Delete,
+        KeyCode::Char('[') => Action::PrevDetailTab,
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Char('y') => Action::CopyId,
+        KeyCode::Char('?') => Action::ShowHelp,
+        KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
 /// S3詳細画面のキー処理
 fn handle_s3_detail_key(key: KeyEvent) -> Action {
     if is_quit_key(&key) {
         return Action::Quit;
     }
     match key.code {
+        KeyCode::Char(']') => Action::SwitchDetailTab,
         KeyCode::Char('[') => Action::PrevDetailTab,
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Char('g') => Action::MoveToTop,
         KeyCode::Char('G') => Action::MoveToBottom,
         KeyCode::Enter => Action::Enter,
+        KeyCode::Char('d') => Action::Download,
+        KeyCode::Char('u') => Action::Upload,
         KeyCode::Char('D') => Action::Delete,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::Back,
+        _ => Action::Noop,
+    }
+}
+
+/// S3オブジェクトプレビュー画面のキー処理
+fn handle_s3_preview_key(key: KeyEvent) -> Action {
+    if is_quit_key(&key) {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::PreviewScrollDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::PreviewScrollUp,
+        KeyCode::Char('g') => Action::PreviewScrollToTop,
+        KeyCode::Char('G') => Action::PreviewScrollToBottom,
+        KeyCode::Esc => Action::Back,
+        KeyCode::Char('?') => Action::ShowHelp,
         _ => Action::Noop,
     }
 }
@@ -462,6 +528,7 @@ fn is_quit_key(key: &KeyEvent) -> bool {
 mod tests {
     use super::*;
     use crate::app::{ConfirmAction, Message, MessageLevel};
+    use crate::cli::DeletePermissions;
     use crate::service::ServiceKind;
     use crate::tab::TabView;
     use rstest::rstest;
@@ -595,6 +662,7 @@ mod tests {
     #[case(key_char('/'), Action::StartFilter)]
     #[case(key_char('r'), Action::Refresh)]
     #[case(key_char('y'), Action::CopyId)]
+    #[case(key_char('c'), Action::Create)]
     #[case(key(KeyCode::Esc), Action::Back)]
     #[case(key_char('q'), Action::Quit)]
     fn handle_key_returns_expected_action_when_ecr_list_normal(
@@ -676,9 +744,13 @@ mod tests {
     #[case(key_char('y'), Action::CopyId)]
     #[case(key_char('?'), Action::ShowHelp)]
     #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char(']'), Action::SwitchDetailTab)]
+    #[case(key_char('['), Action::PrevDetailTab)]
     #[case(key_char('a'), Action::EcsExec)]
+    #[case(key_char('d'), Action::ForceDeploy)]
+    #[case(key_char('s'), Action::ScaleService)]
     #[case(key_char('q'), Action::Quit)]
-    #[case(key_char('x'), Action::Noop)]
+    #[case(key_char('x'), Action::StopTask)]
     fn handle_key_returns_expected_action_when_ecs_detail(
         #[case] input: KeyEvent,
         #[case] expected: Action,
@@ -695,6 +767,8 @@ mod tests {
     #[case(key(KeyCode::Enter), Action::Enter)]
     #[case(key_char('j'), Action::MoveDown)]
     #[case(key_char('k'), Action::MoveUp)]
+    #[case(key_char('d'), Action::Download)]
+    #[case(key_char('u'), Action::Upload)]
     #[case(key(KeyCode::Esc), Action::Back)]
     #[case(key_char('q'), Action::Quit)]
     fn handle_key_returns_expected_action_when_s3_detail(
@@ -702,6 +776,29 @@ mod tests {
         #[case] expected: Action,
     ) {
         let app = app_with_view(Some((ServiceKind::S3, TabView::Detail)));
+        assert_eq!(handle_key(&app, input), expected);
+    }
+
+    // ──────────────────────────────────────────────
+    // ECR詳細画面テスト
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(key_char(']'), Action::SwitchDetailTab)]
+    #[case(key_char('['), Action::PrevDetailTab)]
+    #[case(key_char('j'), Action::MoveDown)]
+    #[case(key_char('k'), Action::MoveUp)]
+    #[case(key_char('g'), Action::MoveToTop)]
+    #[case(key_char('G'), Action::MoveToBottom)]
+    #[case(key_char('y'), Action::CopyId)]
+    #[case(key_char('?'), Action::ShowHelp)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('q'), Action::Quit)]
+    fn handle_key_returns_expected_action_when_ecr_detail(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_view(Some((ServiceKind::Ecr, TabView::Detail)));
         assert_eq!(handle_key(&app, input), expected);
     }
 
@@ -810,7 +907,6 @@ mod tests {
     #[case(key_char('r'), Action::Refresh)]
     #[case(key_char('y'), Action::CopyId)]
     #[case(key_char('c'), Action::Create)]
-    #[case(key_char('D'), Action::Delete)]
     #[case(key(KeyCode::Esc), Action::Back)]
     #[case(key_char('q'), Action::Quit)]
     fn handle_key_returns_expected_action_when_s3_list_normal(
@@ -833,7 +929,6 @@ mod tests {
     #[case(key_char('r'), Action::Refresh)]
     #[case(key_char('y'), Action::CopyId)]
     #[case(key_char('c'), Action::Create)]
-    #[case(key_char('D'), Action::Delete)]
     #[case(key(KeyCode::Esc), Action::Back)]
     #[case(key_char('q'), Action::Quit)]
     fn handle_key_returns_expected_action_when_secrets_list_normal(
@@ -848,26 +943,73 @@ mod tests {
     // EC2リスト Delete キーテスト
     // ──────────────────────────────────────────────
 
-    #[test]
-    fn handle_key_returns_delete_when_shift_d_in_ec2_list() {
-        let app = app_with_view(Some((ServiceKind::Ec2, TabView::List)));
-        assert_eq!(
-            handle_key(&app, KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
-            Action::Delete,
-        );
+    // ──────────────────────────────────────────────
+    // Delete キーテスト (--allow-delete 有効時)
+    // ──────────────────────────────────────────────
+
+    #[rstest]
+    #[case(ServiceKind::Ec2, TabView::List)]
+    #[case(ServiceKind::Ecr, TabView::List)]
+    #[case(ServiceKind::Ecr, TabView::Detail)]
+    #[case(ServiceKind::S3, TabView::List)]
+    #[case(ServiceKind::S3, TabView::Detail)]
+    #[case(ServiceKind::SecretsManager, TabView::List)]
+    fn handle_key_returns_delete_when_allow_delete_enabled(
+        #[case] service: ServiceKind,
+        #[case] tab_view: TabView,
+    ) {
+        let mut app = app_with_view(Some((service, tab_view)));
+        app.delete_permissions = DeletePermissions::All;
+        assert_eq!(handle_key(&app, key_char('D')), Action::Delete);
+    }
+
+    #[rstest]
+    #[case(ServiceKind::Ec2, TabView::List)]
+    #[case(ServiceKind::Ecr, TabView::List)]
+    #[case(ServiceKind::S3, TabView::List)]
+    #[case(ServiceKind::SecretsManager, TabView::List)]
+    fn handle_key_returns_noop_when_allow_delete_disabled(
+        #[case] service: ServiceKind,
+        #[case] tab_view: TabView,
+    ) {
+        let app = app_with_view(Some((service, tab_view)));
+        // delete_permissions defaults to None
+        assert_eq!(handle_key(&app, key_char('D')), Action::Noop);
     }
 
     // ──────────────────────────────────────────────
-    // S3詳細 Delete キーテスト
+    // S3プレビューモードテスト
     // ──────────────────────────────────────────────
 
-    #[test]
-    fn handle_key_returns_delete_when_shift_d_in_s3_detail() {
-        let app = app_with_view(Some((ServiceKind::S3, TabView::Detail)));
-        assert_eq!(
-            handle_key(&app, KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
-            Action::Delete,
-        );
+    fn app_with_s3_preview() -> App {
+        use crate::aws::s3_model::ObjectContent;
+        let mut app = app_with_view(Some((ServiceKind::S3, TabView::Detail)));
+        if let Some(tab) = app.active_tab_mut() {
+            if let crate::tab::ServiceData::S3 { object_preview, .. } = &mut tab.data {
+                *object_preview = Some(Some(ObjectContent {
+                    content_type: "text/plain".to_string(),
+                    body: "test content".to_string(),
+                    size: 12,
+                }));
+            }
+        }
+        app
+    }
+
+    #[rstest]
+    #[case(key_char('j'), Action::PreviewScrollDown)]
+    #[case(key_char('k'), Action::PreviewScrollUp)]
+    #[case(key_char('g'), Action::PreviewScrollToTop)]
+    #[case(key_char('G'), Action::PreviewScrollToBottom)]
+    #[case(key(KeyCode::Esc), Action::Back)]
+    #[case(key_char('?'), Action::ShowHelp)]
+    #[case(key_char('q'), Action::Quit)]
+    fn handle_key_returns_expected_action_when_s3_preview(
+        #[case] input: KeyEvent,
+        #[case] expected: Action,
+    ) {
+        let app = app_with_s3_preview();
+        assert_eq!(handle_key(&app, input), expected);
     }
 
     // ──────────────────────────────────────────────

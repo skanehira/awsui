@@ -1,15 +1,16 @@
 use tui_input::Input;
 
 use crate::app::{DetailTab, Ec2DetailField, Mode, NavigationEntry};
-use crate::aws::ecr_model::{Image, Repository};
+use crate::aws::ecr_model::{EcrDetailTab, Image, Repository};
 use crate::aws::ecs_model::{Cluster, Service, Task};
 use crate::aws::logs_model::LogEvent;
-use crate::aws::model::Instance;
-use crate::aws::s3_model::{Bucket, S3Object};
+use crate::aws::model::{Instance, SecurityGroup};
+use crate::aws::s3_model::{Bucket, BucketSettings, ObjectContent, S3DetailTab, S3Object};
 use crate::aws::secrets_model::{Secret, SecretDetail};
 use crate::aws::vpc_model::{Subnet, Vpc};
 use crate::fuzzy::fuzzy_filter_items;
 use crate::service::ServiceKind;
+use crate::tui::views::ecs_service_detail::EcsServiceDetailTab;
 use crate::tui::views::secrets_detail::SecretsDetailTab;
 
 /// アイテムリストとフィルタ済みリストを統一管理する
@@ -207,6 +208,7 @@ pub enum EcsNavLevel {
     ClusterDetail,
     ServiceDetail {
         service_index: usize,
+        detail_tab: EcsServiceDetailTab,
     },
     TaskDetail {
         service_index: usize,
@@ -257,10 +259,18 @@ impl EcsNavLevel {
 pub enum ServiceData {
     Ec2 {
         instances: FilterableList<Instance>,
+        security_groups: Vec<SecurityGroup>,
+        selected_sg_index: Option<usize>,
+        metrics: Vec<crate::aws::cloudwatch_model::MetricResult>,
     },
     Ecr {
         repositories: FilterableList<Repository>,
         images: Vec<Image>,
+        detail_tab: EcrDetailTab,
+        /// None = 未ロード, Some(None) = ポリシーなし, Some(Some(json)) = ポリシーあり
+        lifecycle_policy: Option<Option<String>>,
+        /// None = 未ロード, Some(None) = スキャン未実施, Some(Some(result)) = スキャン結果あり
+        scan_result: Option<Option<crate::aws::ecr_model::ImageScanResult>>,
     },
     Ecs {
         clusters: FilterableList<Cluster>,
@@ -273,6 +283,11 @@ pub enum ServiceData {
         objects: Vec<S3Object>,
         selected_bucket: Option<String>,
         current_prefix: String,
+        detail_tab: S3DetailTab,
+        bucket_settings: Option<Option<BucketSettings>>,
+        /// None = プレビューなし, Some(None) = ロード中, Some(Some(content)) = プレビュー表示中
+        object_preview: Option<Option<ObjectContent>>,
+        preview_scroll: usize,
     },
     Vpc {
         vpcs: FilterableList<Vpc>,
@@ -291,10 +306,16 @@ impl ServiceData {
         match service {
             ServiceKind::Ec2 => ServiceData::Ec2 {
                 instances: FilterableList::new(),
+                security_groups: Vec::new(),
+                selected_sg_index: None,
+                metrics: Vec::new(),
             },
             ServiceKind::Ecr => ServiceData::Ecr {
                 repositories: FilterableList::new(),
                 images: Vec::new(),
+                detail_tab: EcrDetailTab::Images,
+                lifecycle_policy: None,
+                scan_result: None,
             },
             ServiceKind::Ecs => ServiceData::Ecs {
                 clusters: FilterableList::new(),
@@ -307,6 +328,10 @@ impl ServiceData {
                 objects: Vec::new(),
                 selected_bucket: None,
                 current_prefix: String::new(),
+                detail_tab: S3DetailTab::Objects,
+                bucket_settings: None,
+                object_preview: None,
+                preview_scroll: 0,
             },
             ServiceKind::Vpc => ServiceData::Vpc {
                 vpcs: FilterableList::new(),
@@ -401,17 +426,30 @@ impl Tab {
     /// 現在のディテールビューのリスト長を返す
     pub fn detail_list_len(&self) -> usize {
         match &self.data {
-            ServiceData::Ec2 { instances, .. } => {
-                if self.detail_tab == DetailTab::Overview {
-                    Ec2DetailField::ALL.len()
-                } else {
-                    instances
-                        .filtered
-                        .get(self.selected_index)
-                        .map(|i| i.tags.len())
-                        .unwrap_or(0)
+            ServiceData::Ec2 {
+                instances,
+                security_groups,
+                selected_sg_index,
+                ..
+            } => match self.detail_tab {
+                DetailTab::Overview => Ec2DetailField::ALL.len(),
+                DetailTab::Tags => instances
+                    .filtered
+                    .get(self.selected_index)
+                    .map(|i| i.tags.len())
+                    .unwrap_or(0),
+                DetailTab::SecurityGroups => {
+                    if let Some(idx) = selected_sg_index {
+                        security_groups
+                            .get(*idx)
+                            .map(|sg| sg.inbound_rules.len() + sg.outbound_rules.len())
+                            .unwrap_or(0)
+                    } else {
+                        security_groups.len()
+                    }
                 }
-            }
+                DetailTab::Metrics => 0, // Metricsはグラフ表示のためスクロール不要
+            },
             ServiceData::Ecr { images, .. } => images.len(),
             ServiceData::Ecs {
                 services,
@@ -441,7 +479,7 @@ impl Tab {
     pub fn apply_filter(&mut self) {
         let filter_text = self.filter_input.value().to_string();
         match &mut self.data {
-            ServiceData::Ec2 { instances } => {
+            ServiceData::Ec2 { instances, .. } => {
                 instances.filtered = fuzzy_filter_items(instances.all(), &filter_text, 1, |i| {
                     vec![
                         i.instance_id.as_str(),
@@ -486,6 +524,17 @@ impl Tab {
     /// サービスデータをクリアする
     pub fn clear_data(&mut self) {
         self.data = ServiceData::new(self.service);
+    }
+
+    /// このタブがS3プレビューモードかどうかを判定
+    pub fn is_in_s3_preview(&self) -> bool {
+        matches!(
+            &self.data,
+            ServiceData::S3 {
+                object_preview: Some(Some(_)),
+                ..
+            }
+        )
     }
 
     /// このタブがログビューかどうかを判定
@@ -626,7 +675,7 @@ impl Tab {
                     } = &mut self.data
                 {
                     match nav_level {
-                        Some(EcsNavLevel::ServiceDetail { service_index }) => {
+                        Some(EcsNavLevel::ServiceDetail { service_index, .. }) => {
                             // サービス詳細 → タスク詳細
                             let svc_idx = *service_index;
                             if !tasks.is_empty() && self.detail_tag_index < tasks.len() {
@@ -641,6 +690,7 @@ impl Tab {
                             if !services.is_empty() && self.detail_tag_index < services.len() {
                                 *nav_level = Some(EcsNavLevel::ServiceDetail {
                                     service_index: self.detail_tag_index,
+                                    detail_tab: EcsServiceDetailTab::Tasks,
                                 });
                                 self.detail_tag_index = 0;
                                 self.loading = true;
@@ -650,19 +700,39 @@ impl Tab {
                     }
                 }
 
-                // S3 Detail: プレフィックス(ディレクトリ)の場合は中に入る
+                // EC2 Detail: SecurityGroupsタブでSG選択 → ルール詳細
+                if self.service == ServiceKind::Ec2
+                    && self.detail_tab == DetailTab::SecurityGroups
+                    && let ServiceData::Ec2 {
+                        security_groups,
+                        selected_sg_index,
+                        ..
+                    } = &mut self.data
+                    && selected_sg_index.is_none()
+                    && self.detail_tag_index < security_groups.len()
+                {
+                    *selected_sg_index = Some(self.detail_tag_index);
+                    self.detail_tag_index = 0;
+                }
+
+                // S3 Detail: プレフィックス(ディレクトリ)の場合は中に入る、ファイルの場合はプレビュー
                 if self.service == ServiceKind::S3
                     && let ServiceData::S3 {
                         objects,
                         current_prefix,
+                        object_preview,
                         ..
                     } = &mut self.data
                     && let Some(obj) = objects.get(self.detail_tag_index)
-                    && obj.is_prefix
                 {
-                    *current_prefix = obj.key.clone();
-                    self.detail_tag_index = 0;
-                    self.loading = true;
+                    if obj.is_prefix {
+                        *current_prefix = obj.key.clone();
+                        self.detail_tag_index = 0;
+                        self.loading = true;
+                    } else {
+                        *object_preview = Some(None);
+                        self.loading = true;
+                    }
                 }
             }
         }
@@ -675,6 +745,33 @@ impl Tab {
                 // リストビューではEscは何もしない
             }
             TabView::Detail => {
+                // EC2: SGルール詳細からSG一覧に戻る
+                if self.service == ServiceKind::Ec2
+                    && self.detail_tab == DetailTab::SecurityGroups
+                    && let ServiceData::Ec2 {
+                        selected_sg_index, ..
+                    } = &mut self.data
+                    && selected_sg_index.is_some()
+                {
+                    *selected_sg_index = None;
+                    self.detail_tag_index = 0;
+                    return;
+                }
+
+                // S3: プレビューモード中はプレビューを閉じる
+                if self.service == ServiceKind::S3
+                    && let ServiceData::S3 {
+                        object_preview,
+                        preview_scroll,
+                        ..
+                    } = &mut self.data
+                    && object_preview.is_some()
+                {
+                    *object_preview = None;
+                    *preview_scroll = 0;
+                    return;
+                }
+
                 // S3: プレフィックス内にいる場合は一つ上に移動
                 if self.service == ServiceKind::S3
                     && let ServiceData::S3 {
@@ -748,7 +845,10 @@ impl Tab {
                         }
                         Some(EcsNavLevel::TaskDetail { service_index, .. }) => {
                             let si = *service_index;
-                            *nav_level = Some(EcsNavLevel::ServiceDetail { service_index: si });
+                            *nav_level = Some(EcsNavLevel::ServiceDetail {
+                                service_index: si,
+                                detail_tab: EcsServiceDetailTab::Tasks,
+                            });
                             return;
                         }
                         Some(EcsNavLevel::ServiceDetail { .. }) => {
@@ -789,8 +889,32 @@ impl Tab {
             ServiceKind::Ec2 => {
                 self.detail_tab = match self.detail_tab {
                     DetailTab::Overview => DetailTab::Tags,
-                    DetailTab::Tags => DetailTab::Overview,
+                    DetailTab::Tags => DetailTab::SecurityGroups,
+                    DetailTab::SecurityGroups => DetailTab::Metrics,
+                    DetailTab::Metrics => DetailTab::Overview,
                 };
+                self.trigger_sg_load_if_needed();
+                self.trigger_metrics_load_if_needed();
+            }
+            ServiceKind::Ecs => self.toggle_ecs_service_detail_tab(),
+            ServiceKind::Ecr => {
+                if let ServiceData::Ecr { detail_tab, .. } = &mut self.data {
+                    *detail_tab = match detail_tab {
+                        EcrDetailTab::Images => EcrDetailTab::Scan,
+                        EcrDetailTab::Scan => EcrDetailTab::Lifecycle,
+                        EcrDetailTab::Lifecycle => EcrDetailTab::Images,
+                    };
+                }
+                self.trigger_ecr_tab_load_if_needed();
+            }
+            ServiceKind::S3 => {
+                if let ServiceData::S3 { detail_tab, .. } = &mut self.data {
+                    *detail_tab = match detail_tab {
+                        S3DetailTab::Objects => S3DetailTab::Settings,
+                        S3DetailTab::Settings => S3DetailTab::Objects,
+                    };
+                }
+                self.trigger_s3_tab_load_if_needed();
             }
             ServiceKind::SecretsManager => {
                 if let ServiceData::Secrets { detail_tab, .. } = &mut self.data {
@@ -812,9 +936,33 @@ impl Tab {
         match self.service {
             ServiceKind::Ec2 => {
                 self.detail_tab = match self.detail_tab {
-                    DetailTab::Overview => DetailTab::Tags,
+                    DetailTab::Overview => DetailTab::Metrics,
+                    DetailTab::Metrics => DetailTab::SecurityGroups,
+                    DetailTab::SecurityGroups => DetailTab::Tags,
                     DetailTab::Tags => DetailTab::Overview,
                 };
+                self.trigger_sg_load_if_needed();
+                self.trigger_metrics_load_if_needed();
+            }
+            ServiceKind::Ecr => {
+                if let ServiceData::Ecr { detail_tab, .. } = &mut self.data {
+                    *detail_tab = match detail_tab {
+                        EcrDetailTab::Images => EcrDetailTab::Lifecycle,
+                        EcrDetailTab::Lifecycle => EcrDetailTab::Scan,
+                        EcrDetailTab::Scan => EcrDetailTab::Images,
+                    };
+                }
+                self.trigger_ecr_tab_load_if_needed();
+            }
+            ServiceKind::Ecs => self.toggle_ecs_service_detail_tab(),
+            ServiceKind::S3 => {
+                if let ServiceData::S3 { detail_tab, .. } = &mut self.data {
+                    *detail_tab = match detail_tab {
+                        S3DetailTab::Objects => S3DetailTab::Settings,
+                        S3DetailTab::Settings => S3DetailTab::Objects,
+                    };
+                }
+                self.trigger_s3_tab_load_if_needed();
             }
             ServiceKind::SecretsManager => {
                 if let ServiceData::Secrets { detail_tab, .. } = &mut self.data {
@@ -827,6 +975,78 @@ impl Tab {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// SecurityGroupsタブ切り替え時にデータ未ロードならloadingをセット
+    fn trigger_sg_load_if_needed(&mut self) {
+        if self.detail_tab == DetailTab::SecurityGroups
+            && let ServiceData::Ec2 {
+                security_groups, ..
+            } = &self.data
+            && security_groups.is_empty()
+        {
+            self.loading = true;
+        }
+    }
+
+    /// S3 Settingsタブ切り替え時にデータ未ロード(None)ならloadingをセット
+    fn trigger_s3_tab_load_if_needed(&mut self) {
+        if let ServiceData::S3 {
+            detail_tab,
+            bucket_settings,
+            ..
+        } = &self.data
+            && *detail_tab == S3DetailTab::Settings
+            && bucket_settings.is_none()
+        {
+            self.loading = true;
+        }
+    }
+
+    /// ECR Scan/Lifecycleタブ切り替え時にデータ未ロード(None)ならloadingをセット
+    fn trigger_ecr_tab_load_if_needed(&mut self) {
+        if let ServiceData::Ecr {
+            detail_tab,
+            lifecycle_policy,
+            scan_result,
+            ..
+        } = &self.data
+        {
+            match detail_tab {
+                EcrDetailTab::Lifecycle if lifecycle_policy.is_none() => {
+                    self.loading = true;
+                }
+                EcrDetailTab::Scan if scan_result.is_none() => {
+                    self.loading = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Metricsタブ切り替え時にデータ未ロードならloadingをセット
+    fn trigger_metrics_load_if_needed(&mut self) {
+        if self.detail_tab == DetailTab::Metrics
+            && let ServiceData::Ec2 { metrics, .. } = &self.data
+            && metrics.is_empty()
+        {
+            self.loading = true;
+        }
+    }
+
+    /// ECSサービス詳細タブをトグル（Tasks ↔ Deployments）。
+    /// タブが2つのみのため、next/prev両方でこの関数を使用する。
+    fn toggle_ecs_service_detail_tab(&mut self) {
+        if let ServiceData::Ecs {
+            nav_level: Some(EcsNavLevel::ServiceDetail { detail_tab, .. }),
+            ..
+        } = &mut self.data
+        {
+            *detail_tab = match detail_tab {
+                EcsServiceDetailTab::Tasks => EcsServiceDetailTab::Deployments,
+                EcsServiceDetailTab::Deployments => EcsServiceDetailTab::Tasks,
+            };
         }
     }
 

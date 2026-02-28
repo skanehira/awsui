@@ -5,16 +5,18 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::aws::client::Ec2Client;
+use crate::aws::cloudwatch_client::CloudWatchClient;
+use crate::aws::cloudwatch_model::MetricResult;
 use crate::aws::ecr_client::EcrClient;
-use crate::aws::ecr_model::{Image, Repository};
+use crate::aws::ecr_model::{Image, ImageScanResult, Repository};
 use crate::aws::ecs_client::EcsClient;
 use crate::aws::ecs_model::{Cluster, ContainerLogConfig, Service, Task};
 use crate::aws::logs_client::LogsClient;
 use crate::aws::logs_model::LogEvent;
 use crate::aws::mock_data;
-use crate::aws::model::Instance;
+use crate::aws::model::{Instance, SecurityGroup};
 use crate::aws::s3_client::S3Client;
-use crate::aws::s3_model::{Bucket, S3Object};
+use crate::aws::s3_model::{Bucket, BucketSettings, ObjectContent, S3Object};
 use crate::aws::secrets_client::SecretsClient;
 use crate::aws::secrets_model::{Secret, SecretDetail};
 use crate::aws::vpc_client::VpcClient;
@@ -55,6 +57,14 @@ impl Ec2Client for MockEc2ClientImpl {
         let _ = ids;
         Ok(())
     }
+
+    async fn describe_security_groups(
+        &self,
+        _group_ids: &[String],
+    ) -> Result<Vec<SecurityGroup>, AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(mock_data::mock_security_groups())
+    }
 }
 
 pub struct MockEcrClientImpl;
@@ -69,6 +79,46 @@ impl EcrClient for MockEcrClientImpl {
     async fn list_images(&self, _repository_name: &str) -> Result<Vec<Image>, AppError> {
         tokio::time::sleep(MOCK_DELAY).await;
         Ok(mock_data::mock_images())
+    }
+
+    async fn create_repository(
+        &self,
+        _repository_name: &str,
+        _image_tag_mutability: &str,
+    ) -> Result<(), AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(())
+    }
+
+    async fn delete_repository(&self, _repository_name: &str) -> Result<(), AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(())
+    }
+
+    async fn delete_images(
+        &self,
+        _repository_name: &str,
+        _image_digests: &[String],
+    ) -> Result<(), AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(())
+    }
+
+    async fn get_lifecycle_policy(
+        &self,
+        _repository_name: &str,
+    ) -> Result<Option<String>, AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(Some(mock_data::mock_lifecycle_policy_json()))
+    }
+
+    async fn describe_image_scan_findings(
+        &self,
+        _repository_name: &str,
+        _image_digest: &str,
+    ) -> Result<Option<ImageScanResult>, AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(Some(mock_data::mock_scan_result()))
     }
 }
 
@@ -102,6 +152,31 @@ impl EcsClient for MockEcsClientImpl {
         tokio::time::sleep(MOCK_DELAY).await;
         Ok(mock_data::mock_log_configs())
     }
+
+    async fn update_service(
+        &self,
+        _cluster_arn: &str,
+        _service_name: &str,
+        _force_new_deployment: bool,
+    ) -> Result<(), AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(())
+    }
+
+    async fn update_service_desired_count(
+        &self,
+        _cluster_arn: &str,
+        _service_name: &str,
+        _desired_count: i32,
+    ) -> Result<(), AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(())
+    }
+
+    async fn stop_task(&self, _cluster_arn: &str, _task_arn: &str) -> Result<(), AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(())
+    }
 }
 
 pub struct MockS3ClientImpl;
@@ -133,6 +208,31 @@ impl S3Client for MockS3ClientImpl {
     }
 
     async fn delete_object(&self, _bucket_name: &str, _key: &str) -> Result<(), AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(())
+    }
+
+    async fn get_bucket_settings(&self, _bucket_name: &str) -> Result<BucketSettings, AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(mock_data::mock_bucket_settings())
+    }
+
+    async fn get_object(&self, _bucket_name: &str, _key: &str) -> Result<ObjectContent, AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(mock_data::mock_object_content())
+    }
+
+    async fn download_object(&self, _bucket_name: &str, _key: &str) -> Result<Vec<u8>, AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(b"mock file content".to_vec())
+    }
+
+    async fn put_object(
+        &self,
+        _bucket_name: &str,
+        _key: &str,
+        _body: Vec<u8>,
+    ) -> Result<(), AppError> {
         tokio::time::sleep(MOCK_DELAY).await;
         Ok(())
     }
@@ -190,6 +290,16 @@ impl SecretsClient for MockSecretsClientImpl {
     async fn get_secret_value(&self, _secret_id: &str) -> Result<String, AppError> {
         tokio::time::sleep(MOCK_DELAY).await;
         Ok("mock-secret-value-12345".to_string())
+    }
+}
+
+pub struct MockCloudWatchClientImpl;
+
+#[async_trait]
+impl CloudWatchClient for MockCloudWatchClientImpl {
+    async fn get_metric_data(&self, _instance_id: &str) -> Result<Vec<MetricResult>, AppError> {
+        tokio::time::sleep(MOCK_DELAY).await;
+        Ok(mock_data::mock_metrics())
     }
 }
 

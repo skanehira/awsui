@@ -1,8 +1,9 @@
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
+use ratatui::symbols;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Row, Wrap};
+use ratatui::widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Row, Wrap};
 
 use crate::app::{App, DetailTab, Ec2DetailField};
 use crate::aws::model::Instance;
@@ -58,15 +59,23 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                 render_overview(frame, instance, detail_tag_index, inner_chunks[1]);
             }
             DetailTab::Tags => render_tags(frame, instance, detail_tag_index, inner_chunks[1]),
+            DetailTab::SecurityGroups => {
+                render_security_groups(frame, app, detail_tag_index, inner_chunks[1]);
+            }
+            DetailTab::Metrics => {
+                render_metrics(frame, app, inner_chunks[1]);
+            }
         }
     }
 
     // ステータスバー
     let keybinds = match detail_tab {
         DetailTab::Overview => {
-            "Tab:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot s:ssm-connect y:copy-id Esc:back"
+            "]/[:switch-tab j/k:select Enter:follow-link S:start/stop R:reboot s:ssm-connect y:copy-id Esc:back ?:help"
         }
-        DetailTab::Tags => "Tab:switch-tab y:copy-value Esc:back",
+        DetailTab::Tags => "]/[:switch-tab y:copy-value Esc:back ?:help",
+        DetailTab::SecurityGroups => "]/[:switch-tab j/k:select Enter:show-rules Esc:back ?:help",
+        DetailTab::Metrics => "]/[:switch-tab Esc:back ?:help",
     };
     let status = StatusBar::new(keybinds);
     frame.render_widget(status, outer_chunks[1]);
@@ -102,12 +111,26 @@ fn render_tab_bar(frame: &mut Frame, current_tab: &DetailTab, area: Rect) {
     } else {
         theme::inactive()
     };
+    let sg_style = if *current_tab == DetailTab::SecurityGroups {
+        theme::active()
+    } else {
+        theme::inactive()
+    };
+    let metrics_style = if *current_tab == DetailTab::Metrics {
+        theme::active()
+    } else {
+        theme::inactive()
+    };
 
     let tabs = Line::from(vec![
         Span::raw(" "),
         Span::styled("[Overview]", overview_style),
         Span::raw(" "),
         Span::styled("[Tags]", tags_style),
+        Span::raw(" "),
+        Span::styled("[Security Groups]", sg_style),
+        Span::raw(" "),
+        Span::styled("[Metrics]", metrics_style),
     ]);
     frame.render_widget(Paragraph::new(tabs), area);
 }
@@ -243,6 +266,212 @@ fn linkable_detail_line<'a>(
         Span::styled(format!("  {:<12}", label), theme::header().patch(style)),
         Span::styled(format!("{}{}", value, marker), style),
     ])
+}
+
+/// Security Groupsタブを描画
+fn render_security_groups(frame: &mut Frame, app: &App, selected_index: usize, area: Rect) {
+    use crate::tab::ServiceData;
+
+    let (security_groups, selected_sg_index) = if let Some(tab) = app.active_tab()
+        && let ServiceData::Ec2 {
+            security_groups,
+            selected_sg_index,
+            ..
+        } = &tab.data
+    {
+        (security_groups.as_slice(), *selected_sg_index)
+    } else {
+        return;
+    };
+
+    if let Some(idx) = selected_sg_index {
+        if let Some(sg) = security_groups.get(idx) {
+            render_sg_rules(frame, sg, selected_index, area);
+        }
+    } else {
+        render_sg_list(frame, security_groups, selected_index, area);
+    }
+}
+
+/// SG一覧テーブルを描画
+fn render_sg_list(
+    frame: &mut Frame,
+    security_groups: &[crate::aws::model::SecurityGroup],
+    selected_index: usize,
+    area: Rect,
+) {
+    if security_groups.is_empty() {
+        let msg = Paragraph::new("No security groups loaded")
+            .style(theme::inactive())
+            .alignment(Alignment::Center);
+        frame.render_widget(msg, area);
+        return;
+    }
+
+    let header = Row::new(vec![
+        "Group ID",
+        "Group Name",
+        "Description",
+        "Inbound",
+        "Outbound",
+    ]);
+    let rows: Vec<Row> = security_groups
+        .iter()
+        .map(|sg| {
+            Row::new(vec![
+                sg.group_id.clone(),
+                sg.group_name.clone(),
+                sg.description.clone(),
+                sg.inbound_rules.len().to_string(),
+                sg.outbound_rules.len().to_string(),
+            ])
+        })
+        .collect();
+    let widths = vec![
+        Constraint::Length(20),
+        Constraint::Length(20),
+        Constraint::Fill(1),
+        Constraint::Length(10),
+        Constraint::Length(10),
+    ];
+
+    let table = SelectableTable::new(header, rows, widths);
+    frame.render_widget(SelectableTableWidget::new(table, selected_index), area);
+}
+
+/// SGルール詳細を描画（インバウンド + アウトバウンド）
+fn render_sg_rules(
+    frame: &mut Frame,
+    sg: &crate::aws::model::SecurityGroup,
+    selected_index: usize,
+    area: Rect,
+) {
+    // タイトル行
+    let title_area = Rect { height: 1, ..area };
+    let content_area = Rect {
+        y: area.y + 1,
+        height: area.height.saturating_sub(1),
+        ..area
+    };
+
+    let title = Line::from(vec![
+        Span::styled(
+            format!(" {} ", sg.group_name),
+            Style::default().fg(ratatui::style::Color::Cyan),
+        ),
+        Span::raw(format!("({})", sg.group_id)),
+    ]);
+    frame.render_widget(Paragraph::new(title), title_area);
+
+    let header = Row::new(vec![
+        "Direction",
+        "Protocol",
+        "Port Range",
+        "Source/Dest",
+        "Description",
+    ]);
+
+    let rule_to_row = |direction: &str, rule: &crate::aws::model::SecurityGroupRule| {
+        Row::new(vec![
+            direction.to_string(),
+            rule.protocol.clone(),
+            rule.port_range.clone(),
+            rule.source_or_destination.clone(),
+            rule.description.clone().unwrap_or_default(),
+        ])
+    };
+
+    let rows: Vec<Row> = sg
+        .inbound_rules
+        .iter()
+        .map(|r| rule_to_row("Inbound", r))
+        .chain(sg.outbound_rules.iter().map(|r| rule_to_row("Outbound", r)))
+        .collect();
+
+    let widths = vec![
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(12),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+    ];
+
+    let table = SelectableTable::new(header, rows, widths);
+    frame.render_widget(
+        SelectableTableWidget::new(table, selected_index),
+        content_area,
+    );
+}
+
+/// Metricsタブを描画（CPU, NetworkIn, NetworkOut）
+fn render_metrics(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::tab::ServiceData;
+
+    let metrics = if let Some(tab) = app.active_tab()
+        && let ServiceData::Ec2 { metrics, .. } = &tab.data
+    {
+        metrics
+    } else {
+        return;
+    };
+
+    if metrics.is_empty() {
+        let msg = Paragraph::new("No metrics data")
+            .style(theme::inactive())
+            .alignment(Alignment::Center);
+        frame.render_widget(msg, area);
+        return;
+    }
+
+    // メトリクスごとにチャートエリアを分割
+    let n = metrics.len() as u32;
+    let constraints: Vec<Constraint> = metrics.iter().map(|_| Constraint::Ratio(1, n)).collect();
+    let chunks = Layout::vertical(constraints).split(area);
+
+    let colors = [Color::Cyan, Color::Green, Color::Yellow, Color::Magenta];
+
+    for (i, metric) in metrics.iter().enumerate() {
+        let color = colors[i % colors.len()];
+
+        // データポイントを(x, y)に変換
+        let data: Vec<(f64, f64)> = metric
+            .data_points
+            .iter()
+            .map(|dp| (dp.timestamp, dp.value))
+            .collect();
+
+        if data.is_empty() {
+            let msg = Paragraph::new(format!("{}: No data", metric.label)).style(theme::inactive());
+            frame.render_widget(msg, chunks[i]);
+            continue;
+        }
+
+        let x_min = data.iter().map(|d| d.0).fold(f64::INFINITY, f64::min);
+        let x_max = data.iter().map(|d| d.0).fold(f64::NEG_INFINITY, f64::max);
+        let y_max = data
+            .iter()
+            .map(|d| d.1)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .max(1.0); // 全値が0のときでもグラフ範囲を確保する
+
+        let dataset = Dataset::default()
+            .name(metric.label.as_str())
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(color))
+            .data(&data);
+
+        let chart = Chart::new(vec![dataset])
+            .block(
+                Block::default()
+                    .title(format!(" {} ", metric.label))
+                    .borders(Borders::ALL),
+            )
+            .x_axis(Axis::default().bounds([x_min, x_max]))
+            .y_axis(Axis::default().title("Value").bounds([0.0, y_max * 1.1]));
+
+        frame.render_widget(chart, chunks[i]);
+    }
 }
 
 #[cfg(test)]
@@ -424,7 +653,7 @@ mod tests {
         let content = buffer_to_string(&terminal);
         assert!(content.contains("dev-account"));
         assert!(content.contains("ap-northeast-1"));
-        assert!(content.contains("Tab:switch-tab"));
+        assert!(content.contains("]/[:switch-tab"));
     }
 
     #[test]
@@ -441,6 +670,123 @@ mod tests {
     }
 
     #[test]
+    fn render_returns_sg_table_when_security_groups_tab() {
+        use crate::aws::model::{SecurityGroup, SecurityGroupRule};
+
+        let mut app = app_with_detail();
+        if let Some(tab) = app.active_tab_mut() {
+            tab.detail_tab = DetailTab::SecurityGroups;
+            if let ServiceData::Ec2 {
+                security_groups, ..
+            } = &mut tab.data
+            {
+                *security_groups = vec![
+                    SecurityGroup {
+                        group_id: "sg-001".to_string(),
+                        group_name: "web-sg".to_string(),
+                        description: "Web security group".to_string(),
+                        inbound_rules: vec![SecurityGroupRule {
+                            protocol: "tcp".to_string(),
+                            port_range: "443".to_string(),
+                            source_or_destination: "0.0.0.0/0".to_string(),
+                            description: Some("HTTPS".to_string()),
+                        }],
+                        outbound_rules: vec![SecurityGroupRule {
+                            protocol: "-1".to_string(),
+                            port_range: "All".to_string(),
+                            source_or_destination: "0.0.0.0/0".to_string(),
+                            description: None,
+                        }],
+                    },
+                    SecurityGroup {
+                        group_id: "sg-002".to_string(),
+                        group_name: "db-sg".to_string(),
+                        description: "Database security group".to_string(),
+                        inbound_rules: vec![],
+                        outbound_rules: vec![],
+                    },
+                ];
+            }
+        }
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
+
+        insta::assert_snapshot!(buffer_to_string(&terminal));
+    }
+
+    #[test]
+    fn render_returns_sg_rules_snapshot_when_sg_selected() {
+        use crate::aws::model::{SecurityGroup, SecurityGroupRule};
+
+        let mut app = app_with_detail();
+        if let Some(tab) = app.active_tab_mut() {
+            tab.detail_tab = DetailTab::SecurityGroups;
+            if let ServiceData::Ec2 {
+                security_groups,
+                selected_sg_index,
+                ..
+            } = &mut tab.data
+            {
+                *security_groups = vec![SecurityGroup {
+                    group_id: "sg-001".to_string(),
+                    group_name: "web-sg".to_string(),
+                    description: "Web security group".to_string(),
+                    inbound_rules: vec![
+                        SecurityGroupRule {
+                            protocol: "tcp".to_string(),
+                            port_range: "443".to_string(),
+                            source_or_destination: "0.0.0.0/0".to_string(),
+                            description: Some("HTTPS".to_string()),
+                        },
+                        SecurityGroupRule {
+                            protocol: "tcp".to_string(),
+                            port_range: "80".to_string(),
+                            source_or_destination: "0.0.0.0/0".to_string(),
+                            description: Some("HTTP".to_string()),
+                        },
+                    ],
+                    outbound_rules: vec![SecurityGroupRule {
+                        protocol: "-1".to_string(),
+                        port_range: "All".to_string(),
+                        source_or_destination: "0.0.0.0/0".to_string(),
+                        description: None,
+                    }],
+                }];
+                *selected_sg_index = Some(0);
+            }
+        }
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
+
+        insta::assert_snapshot!(buffer_to_string(&terminal));
+    }
+
+    #[test]
+    fn render_returns_no_sg_message_when_security_groups_empty() {
+        let mut app = app_with_detail();
+        if let Some(tab) = app.active_tab_mut() {
+            tab.detail_tab = DetailTab::SecurityGroups;
+        }
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("No security groups loaded"));
+    }
+
+    #[test]
     fn render_returns_tags_snapshot_when_tags_tab() {
         let mut app = app_with_detail();
         if let Some(tab) = app.active_tab_mut() {
@@ -454,5 +800,57 @@ mod tests {
             .unwrap();
 
         insta::assert_snapshot!(buffer_to_string(&terminal));
+    }
+
+    #[test]
+    fn render_returns_no_metrics_message_when_metrics_empty() {
+        let mut app = app_with_detail();
+        if let Some(tab) = app.active_tab_mut() {
+            tab.detail_tab = DetailTab::Metrics;
+        }
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        assert!(content.contains("No metrics data"));
+    }
+
+    #[test]
+    fn render_returns_metrics_chart_when_metrics_loaded() {
+        use crate::aws::cloudwatch_model::{MetricDataPoint, MetricResult};
+        let mut app = app_with_detail();
+        // メトリクスデータをセット
+        if let Some(tab) = app.active_tab_mut() {
+            if let ServiceData::Ec2 { metrics, .. } = &mut tab.data {
+                *metrics = vec![MetricResult {
+                    label: "CPUUtilization".to_string(),
+                    data_points: vec![
+                        MetricDataPoint {
+                            timestamp: 1700000000.0,
+                            value: 10.0,
+                        },
+                        MetricDataPoint {
+                            timestamp: 1700000300.0,
+                            value: 25.0,
+                        },
+                    ],
+                }];
+            }
+            tab.detail_tab = DetailTab::Metrics;
+        }
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| render(frame, &app, frame.area()))
+            .unwrap();
+
+        let content = buffer_to_string(&terminal);
+        // Chartウィジェットがレンダリングされたことを確認（CPUUtilizationラベルが表示される）
+        assert!(content.contains("CPUUtilization"));
     }
 }

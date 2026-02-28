@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, Row};
 
 use crate::app::App;
 use crate::aws::model::{Instance, InstanceState};
+use crate::service::ServiceKind;
 use crate::tui::components::loading::Loading;
 use crate::tui::components::status_bar::render_footer;
 use crate::tui::components::table::{SelectableTable, SelectableTableWidget};
@@ -47,13 +48,15 @@ pub fn render(frame: &mut Frame, app: &App, spinner_tick: usize, area: Rect) {
     }
 
     // フッター
-    render_footer(
-        frame,
-        outer_chunks[1],
-        mode,
-        filter_value,
-        "j/k:move Enter:detail S:start/stop R:reboot s:ssm-connect /:filter ?:help",
-    );
+    let can_delete = app
+        .delete_permissions
+        .can_delete(ServiceKind::Ec2.cli_name());
+    let keybinds = if can_delete {
+        "j/k:move Enter:detail S:start/stop R:reboot D:terminate s:ssm-connect /:filter ?:help"
+    } else {
+        "j/k:move Enter:detail S:start/stop R:reboot s:ssm-connect /:filter ?:help"
+    };
+    render_footer(frame, outer_chunks[1], mode, filter_value, keybinds);
 }
 
 /// 右タイトル文字列を構築（profile │ region）

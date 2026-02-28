@@ -2,11 +2,12 @@
 
 use std::collections::HashMap;
 
-use crate::aws::ecr_model::{Image, Repository};
-use crate::aws::ecs_model::{Cluster, Container, ContainerLogConfig, Service, Task};
+use crate::aws::cloudwatch_model::{MetricDataPoint, MetricResult};
+use crate::aws::ecr_model::{Image, ImageScanResult, Repository};
+use crate::aws::ecs_model::{Cluster, Container, ContainerLogConfig, Deployment, Service, Task};
 use crate::aws::logs_model::LogEvent;
-use crate::aws::model::{Instance, InstanceState, Volume};
-use crate::aws::s3_model::{Bucket, S3Object};
+use crate::aws::model::{Instance, InstanceState, SecurityGroup, SecurityGroupRule, Volume};
+use crate::aws::s3_model::{Bucket, BucketSettings, ObjectContent, S3Object};
 use crate::aws::secrets_model::{Secret, SecretDetail, SecretVersion};
 use crate::aws::vpc_model::{Subnet, Vpc};
 
@@ -105,6 +106,67 @@ pub fn mock_instances() -> Vec<Instance> {
     ]
 }
 
+pub fn mock_security_groups() -> Vec<SecurityGroup> {
+    vec![
+        SecurityGroup {
+            group_id: "sg-web-public".to_string(),
+            group_name: "web-public-sg".to_string(),
+            description: "Security group for web servers".to_string(),
+            inbound_rules: vec![
+                SecurityGroupRule {
+                    protocol: "tcp".to_string(),
+                    port_range: "443".to_string(),
+                    source_or_destination: "0.0.0.0/0".to_string(),
+                    description: Some("HTTPS from anywhere".to_string()),
+                },
+                SecurityGroupRule {
+                    protocol: "tcp".to_string(),
+                    port_range: "80".to_string(),
+                    source_or_destination: "0.0.0.0/0".to_string(),
+                    description: Some("HTTP from anywhere".to_string()),
+                },
+                SecurityGroupRule {
+                    protocol: "tcp".to_string(),
+                    port_range: "22".to_string(),
+                    source_or_destination: "10.0.0.0/8".to_string(),
+                    description: Some("SSH from VPN".to_string()),
+                },
+            ],
+            outbound_rules: vec![SecurityGroupRule {
+                protocol: "All".to_string(),
+                port_range: "All".to_string(),
+                source_or_destination: "0.0.0.0/0".to_string(),
+                description: None,
+            }],
+        },
+        SecurityGroup {
+            group_id: "sg-api-internal".to_string(),
+            group_name: "api-internal-sg".to_string(),
+            description: "Security group for API servers".to_string(),
+            inbound_rules: vec![
+                SecurityGroupRule {
+                    protocol: "tcp".to_string(),
+                    port_range: "8080".to_string(),
+                    source_or_destination: "sg-web-public".to_string(),
+                    description: Some("From web tier".to_string()),
+                },
+                SecurityGroupRule {
+                    protocol: "tcp".to_string(),
+                    port_range: "8080".to_string(),
+                    source_or_destination: "10.0.0.0/8".to_string(),
+                    description: Some("From VPN".to_string()),
+                },
+            ],
+            outbound_rules: vec![SecurityGroupRule {
+                protocol: "All".to_string(),
+                port_range: "All".to_string(),
+                source_or_destination: "0.0.0.0/0".to_string(),
+                description: None,
+            }],
+        },
+    ]
+}
+
 pub fn mock_repositories() -> Vec<Repository> {
     vec![
         Repository {
@@ -151,6 +213,47 @@ pub fn mock_images() -> Vec<Image> {
     ]
 }
 
+pub fn mock_lifecycle_policy_json() -> String {
+    r#"{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep last 10 images",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "imageCountMoreThan",
+        "countNumber": 10
+      },
+      "action": {
+        "type": "expire"
+      }
+    }
+  ]
+}"#
+    .to_string()
+}
+
+pub fn mock_scan_result() -> ImageScanResult {
+    use crate::aws::ecr_model::{FindingSeverity, ScanFinding};
+    ImageScanResult {
+        findings: vec![
+            ScanFinding {
+                name: "CVE-2024-0001".to_string(),
+                severity: FindingSeverity::High,
+                description: "Buffer overflow vulnerability".to_string(),
+                uri: "https://cve.example.com/CVE-2024-0001".to_string(),
+            },
+            ScanFinding {
+                name: "CVE-2024-0002".to_string(),
+                severity: FindingSeverity::Medium,
+                description: "Information disclosure".to_string(),
+                uri: "https://cve.example.com/CVE-2024-0002".to_string(),
+            },
+        ],
+        severity_counts: vec![(FindingSeverity::High, 1), (FindingSeverity::Medium, 1)],
+    }
+}
+
 pub fn mock_clusters() -> Vec<Cluster> {
     vec![
         Cluster {
@@ -193,6 +296,15 @@ pub fn mock_services() -> Vec<Service> {
             health_check_grace_period_seconds: Some(60),
             deployment_status: Some("PRIMARY".to_string()),
             enable_execute_command: true,
+            deployments: vec![Deployment {
+                id: "ecs-svc/1111111111111111111".to_string(),
+                status: "PRIMARY".to_string(),
+                desired_count: 3,
+                running_count: 3,
+                pending_count: 0,
+                rollout_state: Some("COMPLETED".to_string()),
+                created_at: Some("2024-06-01T10:00:00Z".to_string()),
+            }],
         },
         Service {
             service_name: "api-service".to_string(),
@@ -211,6 +323,15 @@ pub fn mock_services() -> Vec<Service> {
             health_check_grace_period_seconds: Some(30),
             deployment_status: Some("PRIMARY".to_string()),
             enable_execute_command: true,
+            deployments: vec![Deployment {
+                id: "ecs-svc/2222222222222222222".to_string(),
+                status: "PRIMARY".to_string(),
+                desired_count: 2,
+                running_count: 2,
+                pending_count: 0,
+                rollout_state: Some("COMPLETED".to_string()),
+                created_at: Some("2024-06-01T10:00:00Z".to_string()),
+            }],
         },
     ]
 }
@@ -346,6 +467,22 @@ pub fn mock_objects() -> Vec<S3Object> {
     ]
 }
 
+pub fn mock_bucket_settings() -> BucketSettings {
+    BucketSettings {
+        region: "ap-northeast-1".to_string(),
+        versioning: "Enabled".to_string(),
+        encryption: "AES256".to_string(),
+    }
+}
+
+pub fn mock_object_content() -> ObjectContent {
+    ObjectContent {
+        content_type: "text/plain".to_string(),
+        body: "Hello, World!\nThis is a sample text file.\nLine 3 of the file.".to_string(),
+        size: 55,
+    }
+}
+
 pub fn mock_vpcs() -> Vec<Vpc> {
     vec![
         Vpc {
@@ -457,4 +594,68 @@ pub fn mock_secret_detail() -> SecretDetail {
         }],
         secret_value: None,
     }
+}
+
+pub fn mock_metrics() -> Vec<MetricResult> {
+    vec![
+        MetricResult {
+            label: "CPUUtilization".to_string(),
+            data_points: vec![
+                MetricDataPoint {
+                    timestamp: 1700000000.0,
+                    value: 15.2,
+                },
+                MetricDataPoint {
+                    timestamp: 1700000300.0,
+                    value: 22.8,
+                },
+                MetricDataPoint {
+                    timestamp: 1700000600.0,
+                    value: 18.5,
+                },
+                MetricDataPoint {
+                    timestamp: 1700000900.0,
+                    value: 35.1,
+                },
+                MetricDataPoint {
+                    timestamp: 1700001200.0,
+                    value: 28.7,
+                },
+            ],
+        },
+        MetricResult {
+            label: "NetworkIn".to_string(),
+            data_points: vec![
+                MetricDataPoint {
+                    timestamp: 1700000000.0,
+                    value: 1024.0,
+                },
+                MetricDataPoint {
+                    timestamp: 1700000300.0,
+                    value: 2048.0,
+                },
+                MetricDataPoint {
+                    timestamp: 1700000600.0,
+                    value: 1536.0,
+                },
+            ],
+        },
+        MetricResult {
+            label: "NetworkOut".to_string(),
+            data_points: vec![
+                MetricDataPoint {
+                    timestamp: 1700000000.0,
+                    value: 512.0,
+                },
+                MetricDataPoint {
+                    timestamp: 1700000300.0,
+                    value: 768.0,
+                },
+                MetricDataPoint {
+                    timestamp: 1700000600.0,
+                    value: 640.0,
+                },
+            ],
+        },
+    ]
 }

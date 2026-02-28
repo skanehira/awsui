@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::aws::s3_model::{Bucket, S3Object};
+use crate::aws::s3_model::{Bucket, BucketSettings, ObjectContent, S3Object};
 use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
@@ -19,6 +19,11 @@ pub trait S3Client: Send + Sync {
     async fn create_bucket(&self, bucket_name: &str) -> Result<(), AppError>;
     async fn delete_bucket(&self, bucket_name: &str) -> Result<(), AppError>;
     async fn delete_object(&self, bucket_name: &str, key: &str) -> Result<(), AppError>;
+    async fn get_bucket_settings(&self, bucket_name: &str) -> Result<BucketSettings, AppError>;
+    async fn get_object(&self, bucket_name: &str, key: &str) -> Result<ObjectContent, AppError>;
+    async fn download_object(&self, bucket_name: &str, key: &str) -> Result<Vec<u8>, AppError>;
+    async fn put_object(&self, bucket_name: &str, key: &str, body: Vec<u8>)
+    -> Result<(), AppError>;
 }
 
 /// AWS SDK S3クライアントの実装
@@ -133,6 +138,151 @@ impl S3Client for AwsS3Client {
             .delete_object()
             .bucket(bucket_name)
             .key(key)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+        Ok(())
+    }
+
+    async fn get_bucket_settings(&self, bucket_name: &str) -> Result<BucketSettings, AppError> {
+        // GetBucketLocation
+        let location_resp = self
+            .client
+            .get_bucket_location()
+            .bucket(bucket_name)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+        let region = location_resp
+            .location_constraint()
+            .map(|l| l.as_str().to_string())
+            .unwrap_or_else(|| "us-east-1".to_string());
+
+        // GetBucketVersioning
+        let versioning_resp = self
+            .client
+            .get_bucket_versioning()
+            .bucket(bucket_name)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+        let versioning = versioning_resp
+            .status()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_else(|| "Not configured".to_string());
+
+        // GetBucketEncryption
+        let encryption = match self
+            .client
+            .get_bucket_encryption()
+            .bucket(bucket_name)
+            .send()
+            .await
+        {
+            Ok(resp) => resp
+                .server_side_encryption_configuration()
+                .and_then(|c| c.rules().first())
+                .and_then(|r| r.apply_server_side_encryption_by_default())
+                .map(|d| d.sse_algorithm().as_str().to_string())
+                .unwrap_or_else(|| "Not configured".to_string()),
+            Err(_) => "Not configured".to_string(),
+        };
+
+        Ok(BucketSettings {
+            region,
+            versioning,
+            encryption,
+        })
+    }
+
+    async fn get_object(&self, bucket_name: &str, key: &str) -> Result<ObjectContent, AppError> {
+        const MAX_SIZE: u64 = 1_048_576; // 1MB
+
+        // HEADでサイズ確認
+        let head_resp = self
+            .client
+            .head_object()
+            .bucket(bucket_name)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+
+        let size = head_resp.content_length().unwrap_or(0) as u64;
+        if size > MAX_SIZE {
+            return Err(AppError::AwsApi(format!(
+                "File too large for preview: {} bytes (max: {} bytes)",
+                size, MAX_SIZE
+            )));
+        }
+
+        let content_type = head_resp
+            .content_type()
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        // テキストファイルか判定
+        if !crate::aws::s3_model::is_text_file(key, &content_type) {
+            return Err(AppError::AwsApi(
+                "Binary files cannot be previewed".to_string(),
+            ));
+        }
+
+        // GetObject でコンテンツ取得
+        let resp = self
+            .client
+            .get_object()
+            .bucket(bucket_name)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| AppError::AwsApi(format!("Failed to read object body: {}", e)))?;
+
+        let body = String::from_utf8_lossy(&bytes.into_bytes()).to_string();
+
+        Ok(ObjectContent {
+            content_type,
+            body,
+            size,
+        })
+    }
+
+    async fn download_object(&self, bucket_name: &str, key: &str) -> Result<Vec<u8>, AppError> {
+        let resp = self
+            .client
+            .get_object()
+            .bucket(bucket_name)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| AppError::AwsApi(format!("Failed to read object body: {}", e)))?;
+
+        Ok(bytes.into_bytes().to_vec())
+    }
+
+    async fn put_object(
+        &self,
+        bucket_name: &str,
+        key: &str,
+        body: Vec<u8>,
+    ) -> Result<(), AppError> {
+        self.client
+            .put_object()
+            .bucket(bucket_name)
+            .key(key)
+            .body(aws_sdk_s3::primitives::ByteStream::from(body))
             .send()
             .await
             .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;

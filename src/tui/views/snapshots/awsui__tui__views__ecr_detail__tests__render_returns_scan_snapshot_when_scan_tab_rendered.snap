@@ -8,13 +8,13 @@ expression: buffer_to_string(&terminal)
 ││  Registry    123456789012                                                                      ││
 │└────────────────────────────────────────────────────────────────────────────────────────────────┘│
 │ Images  |  Scan  |  Lifecycle                                                                    │
-│Digest                    Tags                                 Size         Pushed At             │
-│sha256:abc123def456...    latest, v1.0                         50.0 MB      2025-01-15T12:00:00Z  │
-│sha256:def789abc123...    v0.9                                 10.0 MB      2025-01-15T12:00:00Z  │
-│sha256:ghi012jkl345...    <untagged>                           1.0 MB       2025-01-15T12:00:00Z  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
+│┌ Scan Summary ──────────────────────────────────────────────────────────────────────────────────┐│
+││CRITICAL: 1  HIGH: 1  MEDIUM: 1                                                                 ││
+│└────────────────────────────────────────────────────────────────────────────────────────────────┘│
+│Severity        Name                      Description                                             │
+│CRITICAL        CVE-2024-0001             Remote code execution                                   │
+│HIGH            CVE-2024-0002             Buffer overflow vulnerability                           │
+│MEDIUM          CVE-2024-0003             Information disclosure                                  │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │

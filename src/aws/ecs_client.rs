@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::aws::ecs_model::{Cluster, Container, ContainerLogConfig, Service, Task};
+use crate::aws::ecs_model::{Cluster, Container, ContainerLogConfig, Deployment, Service, Task};
 use crate::error::{AppError, format_error_chain};
 
 #[cfg(test)]
@@ -21,6 +21,19 @@ pub trait EcsClient: Send + Sync {
         &self,
         task_definition_arn: &str,
     ) -> Result<Vec<ContainerLogConfig>, AppError>;
+    async fn update_service(
+        &self,
+        cluster_arn: &str,
+        service_name: &str,
+        force_new_deployment: bool,
+    ) -> Result<(), AppError>;
+    async fn update_service_desired_count(
+        &self,
+        cluster_arn: &str,
+        service_name: &str,
+        desired_count: i32,
+    ) -> Result<(), AppError>;
+    async fn stop_task(&self, cluster_arn: &str, task_arn: &str) -> Result<(), AppError>;
 }
 
 /// AWS SDK ECSクライアントの実装
@@ -224,6 +237,51 @@ impl EcsClient for AwsEcsClient {
 
         Ok(configs)
     }
+
+    async fn update_service(
+        &self,
+        cluster_arn: &str,
+        service_name: &str,
+        force_new_deployment: bool,
+    ) -> Result<(), AppError> {
+        self.client
+            .update_service()
+            .cluster(cluster_arn)
+            .service(service_name)
+            .force_new_deployment(force_new_deployment)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+        Ok(())
+    }
+
+    async fn update_service_desired_count(
+        &self,
+        cluster_arn: &str,
+        service_name: &str,
+        desired_count: i32,
+    ) -> Result<(), AppError> {
+        self.client
+            .update_service()
+            .cluster(cluster_arn)
+            .service(service_name)
+            .desired_count(desired_count)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+        Ok(())
+    }
+
+    async fn stop_task(&self, cluster_arn: &str, task_arn: &str) -> Result<(), AppError> {
+        self.client
+            .stop_task()
+            .cluster(cluster_arn)
+            .task(task_arn)
+            .send()
+            .await
+            .map_err(|e| AppError::AwsApi(format_error_chain(&e)))?;
+        Ok(())
+    }
 }
 
 /// SDK の Cluster → ドメインの Cluster
@@ -279,6 +337,22 @@ fn convert_container(sdk: &aws_sdk_ecs::types::Container) -> Container {
     }
 }
 
+/// SDK の Deployment → ドメインの Deployment
+fn convert_deployment(sdk: &aws_sdk_ecs::types::Deployment) -> Deployment {
+    Deployment {
+        id: sdk.id().unwrap_or_default().to_string(),
+        status: sdk.status().unwrap_or_default().to_string(),
+        desired_count: sdk.desired_count(),
+        running_count: sdk.running_count(),
+        pending_count: sdk.pending_count(),
+        rollout_state: sdk.rollout_state().map(|s| s.as_str().to_string()),
+        created_at: sdk.created_at().map(|dt| {
+            dt.fmt(aws_sdk_ecs::primitives::DateTimeFormat::DateTime)
+                .unwrap_or_default()
+        }),
+    }
+}
+
 /// SDK の Service → ドメインの Service
 fn convert_service(sdk: &aws_sdk_ecs::types::Service) -> Service {
     Service {
@@ -303,5 +377,143 @@ fn convert_service(sdk: &aws_sdk_ecs::types::Service) -> Service {
             .and_then(|d| d.rollout_state())
             .map(|s| s.as_str().to_string()),
         enable_execute_command: sdk.enable_execute_command(),
+        deployments: sdk.deployments().iter().map(convert_deployment).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{convert_deployment, convert_service};
+    use crate::aws::ecs_model::{Deployment, Service};
+
+    #[test]
+    fn convert_deployment_returns_deployment_when_all_fields_present() {
+        let sdk_deployment = aws_sdk_ecs::types::Deployment::builder()
+            .id("ecs-svc/1234567890123456789")
+            .status("PRIMARY")
+            .desired_count(3)
+            .running_count(2)
+            .pending_count(1)
+            .rollout_state(aws_sdk_ecs::types::DeploymentRolloutState::InProgress)
+            .created_at(aws_sdk_ecs::primitives::DateTime::from_secs(1700000000))
+            .build();
+
+        let result = convert_deployment(&sdk_deployment);
+
+        assert_eq!(
+            result,
+            Deployment {
+                id: "ecs-svc/1234567890123456789".to_string(),
+                status: "PRIMARY".to_string(),
+                desired_count: 3,
+                running_count: 2,
+                pending_count: 1,
+                rollout_state: Some("IN_PROGRESS".to_string()),
+                created_at: Some("2023-11-14T22:13:20Z".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn convert_service_returns_service_with_deployments_when_deployments_present() {
+        let sdk_service = aws_sdk_ecs::types::Service::builder()
+            .service_name("my-service")
+            .service_arn("arn:aws:ecs:us-east-1:123456789012:service/my-cluster/my-service")
+            .cluster_arn("arn:aws:ecs:us-east-1:123456789012:cluster/my-cluster")
+            .status("ACTIVE")
+            .desired_count(2)
+            .running_count(2)
+            .pending_count(0)
+            .task_definition("arn:aws:ecs:us-east-1:123456789012:task-definition/my-task:1")
+            .deployments(
+                aws_sdk_ecs::types::Deployment::builder()
+                    .id("ecs-svc/1111111111111111111")
+                    .status("PRIMARY")
+                    .desired_count(2)
+                    .running_count(2)
+                    .pending_count(0)
+                    .rollout_state(aws_sdk_ecs::types::DeploymentRolloutState::Completed)
+                    .build(),
+            )
+            .deployments(
+                aws_sdk_ecs::types::Deployment::builder()
+                    .id("ecs-svc/2222222222222222222")
+                    .status("ACTIVE")
+                    .desired_count(2)
+                    .running_count(0)
+                    .pending_count(0)
+                    .build(),
+            )
+            .build();
+
+        let result = convert_service(&sdk_service);
+
+        assert_eq!(
+            result,
+            Service {
+                service_name: "my-service".to_string(),
+                service_arn: "arn:aws:ecs:us-east-1:123456789012:service/my-cluster/my-service"
+                    .to_string(),
+                cluster_arn: "arn:aws:ecs:us-east-1:123456789012:cluster/my-cluster".to_string(),
+                status: "ACTIVE".to_string(),
+                desired_count: 2,
+                running_count: 2,
+                pending_count: 0,
+                task_definition: "arn:aws:ecs:us-east-1:123456789012:task-definition/my-task:1"
+                    .to_string(),
+                launch_type: None,
+                scheduling_strategy: None,
+                created_at: None,
+                health_check_grace_period_seconds: None,
+                deployment_status: Some("COMPLETED".to_string()),
+                enable_execute_command: false,
+                deployments: vec![
+                    Deployment {
+                        id: "ecs-svc/1111111111111111111".to_string(),
+                        status: "PRIMARY".to_string(),
+                        desired_count: 2,
+                        running_count: 2,
+                        pending_count: 0,
+                        rollout_state: Some("COMPLETED".to_string()),
+                        created_at: None,
+                    },
+                    Deployment {
+                        id: "ecs-svc/2222222222222222222".to_string(),
+                        status: "ACTIVE".to_string(),
+                        desired_count: 2,
+                        running_count: 0,
+                        pending_count: 0,
+                        rollout_state: None,
+                        created_at: None,
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn convert_deployment_returns_deployment_with_none_when_optional_fields_missing() {
+        let sdk_deployment = aws_sdk_ecs::types::Deployment::builder()
+            .id("ecs-svc/9876543210")
+            .status("ACTIVE")
+            .desired_count(1)
+            .running_count(1)
+            .pending_count(0)
+            .build();
+
+        let result = convert_deployment(&sdk_deployment);
+
+        assert_eq!(
+            result,
+            Deployment {
+                id: "ecs-svc/9876543210".to_string(),
+                status: "ACTIVE".to_string(),
+                desired_count: 1,
+                running_count: 1,
+                pending_count: 0,
+                rollout_state: None,
+                created_at: None,
+            }
+        );
     }
 }

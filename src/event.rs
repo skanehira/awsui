@@ -1,8 +1,9 @@
-use crate::aws::ecr_model::{Image, Repository};
+use crate::aws::cloudwatch_model::MetricResult;
+use crate::aws::ecr_model::{Image, ImageScanResult, Repository};
 use crate::aws::ecs_model::{Cluster, ContainerLogConfig, Service, Task};
 use crate::aws::logs_model::LogEvent;
-use crate::aws::model::Instance;
-use crate::aws::s3_model::{Bucket, S3Object};
+use crate::aws::model::{Instance, SecurityGroup};
+use crate::aws::s3_model::{Bucket, BucketSettings, ObjectContent, S3Object};
 use crate::aws::secrets_model::{Secret, SecretDetail};
 use crate::aws::vpc_model::{Subnet, Vpc};
 use crate::error::AppError;
@@ -56,11 +57,29 @@ pub enum TabEvent {
     /// ナビゲーションリンク先のVPCデータ読み込み完了
     NavigateVpcLoaded(Result<(Vec<Vpc>, Vec<Subnet>), AppError>),
 
+    /// EC2セキュリティグループの読み込み完了
+    SecurityGroupsLoaded(Result<Vec<SecurityGroup>, AppError>),
+
+    /// EC2 CloudWatchメトリクスの読み込み完了
+    MetricsLoaded(Result<Vec<MetricResult>, AppError>),
+
     /// ECSタスク定義のログ設定読み込み完了
     EcsLogConfigsLoaded(Result<Vec<ContainerLogConfig>, AppError>),
 
     /// ECSログイベント読み込み完了
     EcsLogEventsLoaded(Result<(Vec<LogEvent>, Option<String>), AppError>),
+
+    /// ECRライフサイクルポリシー読み込み完了
+    LifecyclePolicyLoaded(Result<Option<String>, AppError>),
+
+    /// ECRイメージスキャン結果読み込み完了
+    ScanResultLoaded(Result<Option<ImageScanResult>, AppError>),
+
+    /// S3バケット設定読み込み完了
+    BucketSettingsLoaded(Result<BucketSettings, AppError>),
+
+    /// S3オブジェクトコンテンツ読み込み完了
+    ObjectContentLoaded(Result<ObjectContent, AppError>),
 }
 
 /// バックグラウンドタスクからUIスレッドへ送信されるイベント。

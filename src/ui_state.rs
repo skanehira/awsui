@@ -129,6 +129,14 @@ pub enum ConfirmAction {
     Start(String),
     Stop(String),
     Reboot(String),
+    ForceDeployEcsService {
+        service_name: String,
+        cluster_arn: String,
+    },
+    StopEcsTask {
+        task_arn: String,
+        cluster_arn: String,
+    },
 }
 
 /// フォームの種類
@@ -137,6 +145,10 @@ pub enum FormKind {
     CreateS3Bucket,
     CreateSecret,
     UpdateSecretValue,
+    ScaleEcsService,
+    CreateEcrRepository,
+    DownloadS3Object,
+    UploadS3Object,
 }
 
 /// フォーム入力のコンテキスト
@@ -179,8 +191,16 @@ impl FormContext {
 pub enum DangerAction {
     TerminateEc2(String),
     DeleteS3Bucket(String),
-    DeleteS3Object { bucket: String, key: String },
+    DeleteS3Object {
+        bucket: String,
+        key: String,
+    },
     DeleteSecret(String),
+    DeleteEcrRepository(String),
+    DeleteEcrImage {
+        repository_name: String,
+        image_digest: String,
+    },
 }
 
 impl DangerAction {
@@ -191,6 +211,8 @@ impl DangerAction {
             DangerAction::DeleteS3Bucket(name) => name,
             DangerAction::DeleteS3Object { key, .. } => key,
             DangerAction::DeleteSecret(name) => name,
+            DangerAction::DeleteEcrRepository(name) => name,
+            DangerAction::DeleteEcrImage { image_digest, .. } => image_digest,
         }
     }
 
@@ -208,6 +230,15 @@ impl DangerAction {
             }
             DangerAction::DeleteSecret(name) => {
                 format!("Type '{}' to delete this secret:", name)
+            }
+            DangerAction::DeleteEcrRepository(name) => {
+                format!("Type '{}' to delete this repository:", name)
+            }
+            DangerAction::DeleteEcrImage { image_digest, .. } => {
+                format!(
+                    "Type '{}' to delete this image (all tags removed):",
+                    image_digest
+                )
             }
         }
     }
@@ -233,6 +264,8 @@ impl Eq for DangerConfirmContext {}
 pub enum DetailTab {
     Overview,
     Tags,
+    SecurityGroups,
+    Metrics,
 }
 
 /// メッセージダイアログの種別

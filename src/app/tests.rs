@@ -3,7 +3,7 @@ use crate::action::Action;
 use crate::aws::ecr_model::{Image, Repository};
 use crate::aws::ecs_model::{Cluster, ContainerLogConfig};
 use crate::aws::logs_model::LogEvent;
-use crate::aws::model::InstanceState;
+use crate::aws::model::{InstanceState, SecurityGroup, SecurityGroupRule};
 use crate::aws::s3_model::{Bucket, S3Object};
 use crate::aws::secrets_model::{Secret, SecretDetail};
 use crate::aws::vpc_model::{Subnet, Vpc};
@@ -11,7 +11,7 @@ use crate::cli::DeletePermissions;
 use crate::config::SsoProfile;
 use crate::error::AppError;
 use crate::event::TabEvent;
-use crate::tab::{EcsNavLevel, LogViewState, ServiceData, TabView};
+use crate::tab::{EcsNavLevel, LogViewState, ServiceData, TabId, TabView};
 use std::collections::HashMap;
 
 fn create_test_instance(id: &str, name: &str, state: InstanceState) -> Instance {
@@ -43,7 +43,7 @@ fn app_with_ec2_tab() -> App {
 
 fn set_ec2_instances(app: &mut App, data: Vec<Instance>) {
     let tab = app.active_tab_mut().unwrap();
-    if let ServiceData::Ec2 { instances } = &mut tab.data {
+    if let ServiceData::Ec2 { instances, .. } = &mut tab.data {
         instances.set_items(data);
     }
     tab.loading = false;
@@ -346,7 +346,7 @@ fn handle_event_routes_instances_loaded_to_correct_tab() {
     ));
     let tab = app.active_tab().unwrap();
     assert!(!tab.loading);
-    if let ServiceData::Ec2 { instances } = &tab.data {
+    if let ServiceData::Ec2 { instances, .. } = &tab.data {
         assert_eq!(instances.all().len(), 2);
         assert_eq!(instances.filtered.len(), 2);
     } else {
@@ -523,6 +523,72 @@ fn handle_create_does_nothing_when_ec2_list() {
 }
 
 #[test]
+fn handle_create_sets_form_mode_when_ecr_list() {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::Ecr);
+    app.active_tab_mut().unwrap().loading = false;
+    app.dispatch(Action::Create);
+    if let Mode::Form(ctx) = &app.active_tab().unwrap().mode {
+        assert_eq!(ctx.kind, FormKind::CreateEcrRepository);
+        assert_eq!(ctx.fields.len(), 2);
+        assert_eq!(ctx.fields[0].label, "Repository Name");
+        assert_eq!(ctx.fields[1].input.value(), "MUTABLE");
+    } else {
+        panic!("Expected Form mode");
+    }
+}
+
+#[test]
+fn handle_delete_sets_danger_confirm_when_ecr_with_permission() {
+    let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
+    app.create_tab(ServiceKind::Ecr);
+    if let Some(tab) = app.active_tab_mut() {
+        if let ServiceData::Ecr { repositories, .. } = &mut tab.data {
+            repositories.set_items(vec![crate::aws::ecr_model::Repository {
+                repository_name: "myapp/web".to_string(),
+                repository_uri: "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/myapp/web"
+                    .to_string(),
+                registry_id: "123456789012".to_string(),
+                created_at: None,
+                image_tag_mutability: "MUTABLE".to_string(),
+            }]);
+        }
+    }
+    app.dispatch(Action::Delete);
+    if let Mode::DangerConfirm(ctx) = &app.active_tab().unwrap().mode {
+        assert_eq!(
+            ctx.action,
+            DangerAction::DeleteEcrRepository("myapp/web".to_string())
+        );
+    } else {
+        panic!("Expected DangerConfirm mode");
+    }
+}
+
+#[test]
+fn handle_delete_shows_permission_denied_when_ecr_no_permission() {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::Ecr);
+    if let Some(tab) = app.active_tab_mut() {
+        if let ServiceData::Ecr { repositories, .. } = &mut tab.data {
+            repositories.set_items(vec![crate::aws::ecr_model::Repository {
+                repository_name: "myapp/web".to_string(),
+                repository_uri: "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/myapp/web"
+                    .to_string(),
+                registry_id: "123456789012".to_string(),
+                created_at: None,
+                image_tag_mutability: "MUTABLE".to_string(),
+            }]);
+        }
+    }
+    app.dispatch(Action::Delete);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+    assert_eq!(msg.title, "Permission Denied");
+}
+
+#[test]
 fn handle_delete_shows_permission_denied_when_no_permission() {
     let mut app = app_with_ec2_tab();
     set_ec2_instances(
@@ -632,6 +698,92 @@ fn form_submit_returns_form_submit_side_effect_when_valid() {
     assert!(app.active_tab().unwrap().loading);
 }
 
+#[test]
+fn form_submit_shows_error_when_scale_ecs_service_with_non_numeric() {
+    let service = create_test_ecs_service(false);
+    let mut app = app_with_ecs_service_detail(service, vec![]);
+    let mut input = Input::default();
+    for c in "abc".chars() {
+        input.handle(tui_input::InputRequest::InsertChar(c));
+    }
+    app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
+        kind: FormKind::ScaleEcsService,
+        fields: vec![FormField {
+            label: "Desired Count".to_string(),
+            input,
+            required: true,
+        }],
+        focused_field: 0,
+    });
+    app.dispatch(Action::FormSubmit);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+#[test]
+fn form_submit_shows_error_when_scale_ecs_service_with_negative() {
+    let service = create_test_ecs_service(false);
+    let mut app = app_with_ecs_service_detail(service, vec![]);
+    let mut input = Input::default();
+    for c in "-1".chars() {
+        input.handle(tui_input::InputRequest::InsertChar(c));
+    }
+    app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
+        kind: FormKind::ScaleEcsService,
+        fields: vec![FormField {
+            label: "Desired Count".to_string(),
+            input,
+            required: true,
+        }],
+        focused_field: 0,
+    });
+    app.dispatch(Action::FormSubmit);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+#[test]
+fn form_submit_returns_form_submit_side_effect_when_scale_ecs_service() {
+    let service = create_test_ecs_service(false);
+    let mut app = app_with_ecs_service_detail(service, vec![]);
+    let mut input = Input::default();
+    input.handle(tui_input::InputRequest::InsertChar('3'));
+    app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
+        kind: FormKind::ScaleEcsService,
+        fields: vec![FormField {
+            label: "Desired Count".to_string(),
+            input,
+            required: true,
+        }],
+        focused_field: 0,
+    });
+    let result = app.dispatch(Action::FormSubmit);
+    assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+    assert!(matches!(result, SideEffect::FormSubmit(_)));
+    assert!(app.active_tab().unwrap().loading);
+}
+
+#[test]
+fn form_submit_returns_form_submit_side_effect_when_scale_ecs_service_with_zero() {
+    let service = create_test_ecs_service(false);
+    let mut app = app_with_ecs_service_detail(service, vec![]);
+    let mut input = Input::default();
+    input.handle(tui_input::InputRequest::InsertChar('0'));
+    app.active_tab_mut().unwrap().mode = Mode::Form(FormContext {
+        kind: FormKind::ScaleEcsService,
+        fields: vec![FormField {
+            label: "Desired Count".to_string(),
+            input,
+            required: true,
+        }],
+        focused_field: 0,
+    });
+    let result = app.dispatch(Action::FormSubmit);
+    assert!(matches!(result, SideEffect::FormSubmit(_)));
+}
+
 // ──────────────────────────────────────────────
 // DangerConfirm テスト
 // ──────────────────────────────────────────────
@@ -677,7 +829,7 @@ fn danger_confirm_submit_returns_danger_action_when_text_matches() {
 fn apply_filter_filters_tab_data_when_on_tab() {
     let mut app = app_with_ec2_tab();
     let tab = app.active_tab_mut().unwrap();
-    if let ServiceData::Ec2 { instances } = &mut tab.data {
+    if let ServiceData::Ec2 { instances, .. } = &mut tab.data {
         instances.set_items(vec![
             create_test_instance("i-001", "web", InstanceState::Running),
             create_test_instance("i-002", "api", InstanceState::Stopped),
@@ -687,7 +839,7 @@ fn apply_filter_filters_tab_data_when_on_tab() {
     tab.loading = false;
     app.apply_filter();
     let tab = app.active_tab().unwrap();
-    if let ServiceData::Ec2 { instances } = &tab.data {
+    if let ServiceData::Ec2 { instances, .. } = &tab.data {
         assert_eq!(instances.filtered.len(), 1);
         assert_eq!(instances.filtered[0].name, "web");
     } else {
@@ -827,7 +979,47 @@ fn switch_detail_tab_toggles_ec2_detail_tab() {
     app.dispatch(Action::SwitchDetailTab);
     assert_eq!(app.active_tab().unwrap().detail_tab, DetailTab::Tags);
     app.dispatch(Action::SwitchDetailTab);
+    assert_eq!(
+        app.active_tab().unwrap().detail_tab,
+        DetailTab::SecurityGroups
+    );
+    app.dispatch(Action::SwitchDetailTab);
+    assert_eq!(app.active_tab().unwrap().detail_tab, DetailTab::Metrics);
+    app.dispatch(Action::SwitchDetailTab);
     assert_eq!(app.active_tab().unwrap().detail_tab, DetailTab::Overview);
+}
+
+// ──────────────────────────────────────────────
+// ECS ServiceDetail タブ切り替えテスト
+// ──────────────────────────────────────────────
+
+fn ecs_service_detail_tab(app: &App) -> crate::tui::views::ecs_service_detail::EcsServiceDetailTab {
+    let ServiceData::Ecs { nav_level, .. } = &app.active_tab().unwrap().data else {
+        panic!("Expected ECS service data");
+    };
+    let Some(crate::tab::EcsNavLevel::ServiceDetail { detail_tab, .. }) = nav_level else {
+        panic!("Expected ServiceDetail nav level");
+    };
+    detail_tab.clone()
+}
+
+#[test]
+fn switch_detail_tab_toggles_ecs_service_detail_tab() {
+    use crate::tui::views::ecs_service_detail::EcsServiceDetailTab;
+
+    let service = create_test_ecs_service(false);
+    let mut app = app_with_ecs_service_detail(service, vec![]);
+
+    assert_eq!(ecs_service_detail_tab(&app), EcsServiceDetailTab::Tasks);
+
+    app.dispatch(Action::SwitchDetailTab);
+    assert_eq!(
+        ecs_service_detail_tab(&app),
+        EcsServiceDetailTab::Deployments
+    );
+
+    app.dispatch(Action::SwitchDetailTab);
+    assert_eq!(ecs_service_detail_tab(&app), EcsServiceDetailTab::Tasks);
 }
 
 // ──────────────────────────────────────────────
@@ -927,7 +1119,7 @@ fn cancel_filter_resets_filter_and_sets_normal_mode() {
     let tab = app.active_tab_mut().unwrap();
     tab.mode = Mode::Filter;
     tab.filter_input = Input::from("web");
-    if let ServiceData::Ec2 { instances } = &mut tab.data {
+    if let ServiceData::Ec2 { instances, .. } = &mut tab.data {
         instances.set_items(vec![create_test_instance(
             "i-001",
             "web",
@@ -1448,6 +1640,7 @@ fn create_test_ecs_service(enable_exec: bool) -> crate::aws::ecs_model::Service 
         health_check_grace_period_seconds: None,
         deployment_status: None,
         enable_execute_command: enable_exec,
+        deployments: vec![],
     }
 }
 
@@ -1626,7 +1819,10 @@ fn app_with_ecs_service_detail(
     {
         *svcs = vec![service];
         *t = tasks;
-        *nav_level = Some(crate::tab::EcsNavLevel::ServiceDetail { service_index: 0 });
+        *nav_level = Some(crate::tab::EcsNavLevel::ServiceDetail {
+            service_index: 0,
+            detail_tab: crate::tui::views::ecs_service_detail::EcsServiceDetailTab::Tasks,
+        });
     }
     tab.loading = false;
     app
@@ -1841,7 +2037,7 @@ fn handle_tab_event_instances_loaded_sets_data_when_ok() {
 
     let tab = app.active_tab().unwrap();
     assert!(!tab.loading);
-    if let ServiceData::Ec2 { instances } = &tab.data {
+    if let ServiceData::Ec2 { instances, .. } = &tab.data {
         assert_eq!(instances.len(), 2);
         assert_eq!(instances.filtered[0].instance_id, "i-001");
     } else {
@@ -3163,4 +3359,702 @@ fn dispatch_container_select_handle_input_filters_names() {
     } else {
         panic!("Expected ContainerSelect mode");
     }
+}
+
+// ──────────────────────────────────────────────
+// ForceDeploy テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn force_deploy_sets_confirm_mode_when_ecs_service_detail() {
+    let service = create_test_ecs_service(false);
+    let mut app = app_with_ecs_service_detail(service, vec![]);
+    app.dispatch(Action::ForceDeploy);
+    assert_eq!(
+        app.active_tab().unwrap().mode,
+        Mode::Confirm(ConfirmAction::ForceDeployEcsService {
+            service_name: "web-service".to_string(),
+            cluster_arn: "arn:aws:ecs:ap-northeast-1:123456789012:cluster/production".to_string(),
+        })
+    );
+}
+
+// ──────────────────────────────────────────────
+// ScaleService テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn scale_service_sets_form_mode_when_ecs_service_detail() {
+    let service = create_test_ecs_service(false);
+    let mut app = app_with_ecs_service_detail(service, vec![]);
+    app.dispatch(Action::ScaleService);
+
+    let tab = app.active_tab().unwrap();
+    let Mode::Form(ctx) = &tab.mode else {
+        panic!("Expected Form mode");
+    };
+    assert_eq!(ctx.kind, FormKind::ScaleEcsService);
+    assert_eq!(ctx.fields.len(), 1);
+    assert_eq!(ctx.fields[0].label, "Desired Count");
+    assert_eq!(ctx.fields[0].input.value(), "1"); // desired_count of test service
+    assert!(ctx.fields[0].required);
+}
+
+// ──────────────────────────────────────────────
+// StopTask テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn stop_task_sets_confirm_mode_when_ecs_service_detail_with_tasks() {
+    let service = create_test_ecs_service(false);
+    let task = create_test_task("abc123", &service.cluster_arn, vec![]);
+    let mut app = app_with_ecs_service_detail(service, vec![task]);
+    app.dispatch(Action::StopTask);
+    assert_eq!(
+        app.active_tab().unwrap().mode,
+        Mode::Confirm(ConfirmAction::StopEcsTask {
+            task_arn: "arn:aws:ecs:ap-northeast-1:123456789012:task/production/abc123".to_string(),
+            cluster_arn: "arn:aws:ecs:ap-northeast-1:123456789012:cluster/production".to_string(),
+        })
+    );
+}
+
+#[test]
+fn stop_task_does_nothing_when_no_tasks() {
+    let service = create_test_ecs_service(false);
+    let mut app = app_with_ecs_service_detail(service, vec![]);
+    app.dispatch(Action::StopTask);
+    assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+}
+
+// ──────────────────────────────────────────────
+// SecurityGroupsLoaded handle_event テスト
+// ──────────────────────────────────────────────
+
+fn create_test_security_groups() -> Vec<SecurityGroup> {
+    vec![
+        SecurityGroup {
+            group_id: "sg-001".to_string(),
+            group_name: "web-sg".to_string(),
+            description: "Web security group".to_string(),
+            inbound_rules: vec![SecurityGroupRule {
+                protocol: "tcp".to_string(),
+                port_range: "443".to_string(),
+                source_or_destination: "0.0.0.0/0".to_string(),
+                description: Some("HTTPS".to_string()),
+            }],
+            outbound_rules: vec![SecurityGroupRule {
+                protocol: "-1".to_string(),
+                port_range: "All".to_string(),
+                source_or_destination: "0.0.0.0/0".to_string(),
+                description: None,
+            }],
+        },
+        SecurityGroup {
+            group_id: "sg-002".to_string(),
+            group_name: "db-sg".to_string(),
+            description: "Database security group".to_string(),
+            inbound_rules: vec![],
+            outbound_rules: vec![],
+        },
+    ]
+}
+
+#[test]
+fn handle_event_stores_security_groups_when_loaded_ok() {
+    let mut app = app_with_ec2_tab();
+    let tab_id = app.active_tab().unwrap().id;
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = true;
+    }
+    let sgs = create_test_security_groups();
+    app.handle_event(AppEvent::TabEvent(
+        tab_id,
+        TabEvent::SecurityGroupsLoaded(Ok(sgs.clone())),
+    ));
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ec2 {
+        security_groups, ..
+    } = &tab.data
+    {
+        assert_eq!(security_groups.len(), 2);
+        assert_eq!(security_groups[0].group_id, "sg-001");
+        assert_eq!(security_groups[1].group_id, "sg-002");
+    } else {
+        panic!("Expected Ec2 ServiceData");
+    }
+}
+
+#[test]
+fn handle_event_clears_loading_when_security_groups_loaded_ok() {
+    let mut app = app_with_ec2_tab();
+    let tab_id = app.active_tab().unwrap().id;
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = true;
+    }
+    app.handle_event(AppEvent::TabEvent(
+        tab_id,
+        TabEvent::SecurityGroupsLoaded(Ok(vec![])),
+    ));
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+}
+
+#[test]
+fn handle_event_shows_error_when_security_groups_loaded_err() {
+    let mut app = app_with_ec2_tab();
+    let tab_id = app.active_tab().unwrap().id;
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = true;
+    }
+    app.handle_event(AppEvent::TabEvent(
+        tab_id,
+        TabEvent::SecurityGroupsLoaded(Err(AppError::AwsApi("access denied".to_string()))),
+    ));
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// EC2 CloudWatch Metrics テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_event_stores_metrics_when_loaded_ok() {
+    use crate::aws::cloudwatch_model::{MetricDataPoint, MetricResult};
+    let mut app = app_with_ec2_tab();
+    let tab_id = app.active_tab().unwrap().id;
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = true;
+    }
+    let metrics = vec![
+        MetricResult {
+            label: "CPUUtilization".to_string(),
+            data_points: vec![MetricDataPoint {
+                timestamp: 1700000000.0,
+                value: 10.0,
+            }],
+        },
+        MetricResult {
+            label: "NetworkIn".to_string(),
+            data_points: vec![MetricDataPoint {
+                timestamp: 1700000000.0,
+                value: 1024.0,
+            }],
+        },
+    ];
+    app.handle_event(AppEvent::TabEvent(
+        tab_id,
+        TabEvent::MetricsLoaded(Ok(metrics)),
+    ));
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ec2 { metrics, .. } = &tab.data {
+        assert_eq!(metrics.len(), 2);
+        assert_eq!(metrics[0].label, "CPUUtilization");
+        assert_eq!(metrics[1].label, "NetworkIn");
+    } else {
+        panic!("Expected Ec2 ServiceData");
+    }
+}
+
+#[test]
+fn handle_event_shows_error_when_metrics_loaded_err() {
+    let mut app = app_with_ec2_tab();
+    let tab_id = app.active_tab().unwrap().id;
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = true;
+    }
+    app.handle_event(AppEvent::TabEvent(
+        tab_id,
+        TabEvent::MetricsLoaded(Err(AppError::AwsApi("throttled".to_string()))),
+    ));
+    let tab = app.active_tab().unwrap();
+    assert!(!tab.loading);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// EC2 Security Group ナビゲーションテスト
+// ──────────────────────────────────────────────
+
+fn app_with_ec2_sg_detail() -> App {
+    let mut app = app_with_ec2_tab();
+    let tab_id = app.active_tab().unwrap().id;
+    // インスタンスデータをセット
+    let instance = create_test_instance("i-001", "web", InstanceState::Running);
+    if let Some(tab) = app.active_tab_mut() {
+        if let ServiceData::Ec2 { instances, .. } = &mut tab.data {
+            instances.set_items(vec![instance]);
+        }
+        tab.tab_view = TabView::Detail;
+        tab.detail_tab = DetailTab::SecurityGroups;
+    }
+    // SGデータをロード
+    app.handle_event(AppEvent::TabEvent(
+        tab_id,
+        TabEvent::SecurityGroupsLoaded(Ok(create_test_security_groups())),
+    ));
+    app
+}
+
+#[test]
+fn enter_sets_selected_sg_index_when_sg_tab() {
+    let mut app = app_with_ec2_sg_detail();
+    app.dispatch(Action::Enter);
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ec2 {
+        selected_sg_index, ..
+    } = &tab.data
+    {
+        assert_eq!(*selected_sg_index, Some(0));
+    } else {
+        panic!("Expected Ec2 ServiceData");
+    }
+}
+
+#[test]
+fn back_clears_selected_sg_index_when_in_sg_rules() {
+    let mut app = app_with_ec2_sg_detail();
+    // Enter → ルール詳細
+    app.dispatch(Action::Enter);
+    // Esc → SG一覧に戻る
+    app.dispatch(Action::Back);
+    let tab = app.active_tab().unwrap();
+    if let ServiceData::Ec2 {
+        selected_sg_index, ..
+    } = &tab.data
+    {
+        assert_eq!(*selected_sg_index, None);
+    } else {
+        panic!("Expected Ec2 ServiceData");
+    }
+    // タブビューはDetailのまま
+    assert_eq!(tab.tab_view, TabView::Detail);
+}
+
+#[test]
+fn back_returns_to_list_when_sg_tab_no_selection() {
+    let mut app = app_with_ec2_sg_detail();
+    // selected_sg_indexがNoneの状態でEsc → リストに戻る
+    app.dispatch(Action::Back);
+    let tab = app.active_tab().unwrap();
+    assert_eq!(tab.tab_view, TabView::List);
+}
+
+// ──────────────────────────────────────────────
+// ECR Detail (Image Delete) テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_delete_sets_danger_confirm_when_ecr_detail_with_permission() {
+    let mut app = App::with_delete_permissions("dev".to_string(), None, DeletePermissions::All);
+    app.create_tab(ServiceKind::Ecr);
+    if let Some(tab) = app.active_tab_mut() {
+        if let ServiceData::Ecr {
+            repositories,
+            images,
+            ..
+        } = &mut tab.data
+        {
+            repositories.set_items(vec![crate::aws::ecr_model::Repository {
+                repository_name: "myapp/web".to_string(),
+                repository_uri: "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/myapp/web"
+                    .to_string(),
+                registry_id: "123456789012".to_string(),
+                created_at: None,
+                image_tag_mutability: "MUTABLE".to_string(),
+            }]);
+            *images = vec![crate::aws::ecr_model::Image {
+                image_digest: "sha256:abc123".to_string(),
+                image_tags: vec!["latest".to_string()],
+                pushed_at: None,
+                image_size_bytes: Some(1024),
+            }];
+        }
+        tab.tab_view = TabView::Detail;
+        tab.detail_tag_index = 0;
+    }
+    app.dispatch(Action::Delete);
+    if let Mode::DangerConfirm(ctx) = &app.active_tab().unwrap().mode {
+        assert_eq!(
+            ctx.action,
+            DangerAction::DeleteEcrImage {
+                repository_name: "myapp/web".to_string(),
+                image_digest: "sha256:abc123".to_string(),
+            }
+        );
+    } else {
+        panic!("Expected DangerConfirm mode");
+    }
+}
+
+#[test]
+fn handle_delete_shows_permission_denied_when_ecr_detail_no_permission() {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::Ecr);
+    if let Some(tab) = app.active_tab_mut() {
+        if let ServiceData::Ecr {
+            repositories,
+            images,
+            ..
+        } = &mut tab.data
+        {
+            repositories.set_items(vec![crate::aws::ecr_model::Repository {
+                repository_name: "myapp/web".to_string(),
+                repository_uri: "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/myapp/web"
+                    .to_string(),
+                registry_id: "123456789012".to_string(),
+                created_at: None,
+                image_tag_mutability: "MUTABLE".to_string(),
+            }]);
+            *images = vec![crate::aws::ecr_model::Image {
+                image_digest: "sha256:abc123".to_string(),
+                image_tags: vec!["latest".to_string()],
+                pushed_at: None,
+                image_size_bytes: Some(1024),
+            }];
+        }
+        tab.tab_view = TabView::Detail;
+        tab.detail_tag_index = 0;
+    }
+    app.dispatch(Action::Delete);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+    assert_eq!(msg.title, "Permission Denied");
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: LifecyclePolicyLoaded テスト
+// ──────────────────────────────────────────────
+
+fn create_ecr_app_with_tab() -> (App, TabId) {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::Ecr);
+    let tab_id = app.active_tab().unwrap().id;
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = true;
+    }
+    (app, tab_id)
+}
+
+#[test]
+fn handle_tab_event_lifecycle_policy_loaded_sets_data_when_ok() {
+    let (mut app, tab_id) = create_ecr_app_with_tab();
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::LifecyclePolicyLoaded(Ok(Some(r#"{"rules":[{"rulePriority":1}]}"#.to_string()))),
+    );
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecr {
+        lifecycle_policy, ..
+    } = &tab.data
+    {
+        assert_eq!(
+            *lifecycle_policy,
+            Some(Some(r#"{"rules":[{"rulePriority":1}]}"#.to_string()))
+        );
+    } else {
+        panic!("Expected Ecr ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_lifecycle_policy_loaded_sets_none_when_no_policy() {
+    let (mut app, tab_id) = create_ecr_app_with_tab();
+    app.handle_tab_event(tab_id, TabEvent::LifecyclePolicyLoaded(Ok(None)));
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecr {
+        lifecycle_policy, ..
+    } = &tab.data
+    {
+        assert_eq!(*lifecycle_policy, Some(None));
+    } else {
+        panic!("Expected Ecr ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_lifecycle_policy_loaded_shows_error_when_err() {
+    let (mut app, tab_id) = create_ecr_app_with_tab();
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::LifecyclePolicyLoaded(Err(AppError::AwsApi("access denied".to_string()))),
+    );
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// ──────────────────────────────────────────────
+// handle_tab_event: ScanResultLoaded テスト
+// ──────────────────────────────────────────────
+
+#[test]
+fn handle_tab_event_scan_result_loaded_sets_data_when_ok() {
+    use crate::aws::ecr_model::{FindingSeverity, ImageScanResult, ScanFinding};
+    let (mut app, tab_id) = create_ecr_app_with_tab();
+    let scan = ImageScanResult {
+        findings: vec![ScanFinding {
+            name: "CVE-2024-0001".to_string(),
+            severity: FindingSeverity::High,
+            description: "Test vulnerability".to_string(),
+            uri: "https://example.com".to_string(),
+        }],
+        severity_counts: vec![(FindingSeverity::High, 1)],
+    };
+    app.handle_tab_event(tab_id, TabEvent::ScanResultLoaded(Ok(Some(scan.clone()))));
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecr { scan_result, .. } = &tab.data {
+        assert_eq!(*scan_result, Some(Some(scan)));
+    } else {
+        panic!("Expected Ecr ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_scan_result_loaded_sets_none_when_no_scan() {
+    let (mut app, tab_id) = create_ecr_app_with_tab();
+    app.handle_tab_event(tab_id, TabEvent::ScanResultLoaded(Ok(None)));
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::Ecr { scan_result, .. } = &tab.data {
+        assert_eq!(*scan_result, Some(None));
+    } else {
+        panic!("Expected Ecr ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_scan_result_loaded_shows_error_when_err() {
+    let (mut app, tab_id) = create_ecr_app_with_tab();
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::ScanResultLoaded(Err(AppError::AwsApi("access denied".to_string()))),
+    );
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// --- BucketSettingsLoaded tests ---
+
+fn create_s3_app_with_tab() -> (App, TabId) {
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::S3);
+    let tab_id = app.active_tab().unwrap().id;
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = true;
+    }
+    (app, tab_id)
+}
+
+#[test]
+fn handle_tab_event_bucket_settings_loaded_sets_data_when_ok() {
+    use crate::aws::s3_model::BucketSettings;
+    let (mut app, tab_id) = create_s3_app_with_tab();
+    let settings = BucketSettings {
+        region: "us-east-1".to_string(),
+        versioning: "Enabled".to_string(),
+        encryption: "AES256".to_string(),
+    };
+    app.handle_tab_event(tab_id, TabEvent::BucketSettingsLoaded(Ok(settings.clone())));
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::S3 {
+        bucket_settings, ..
+    } = &tab.data
+    {
+        assert_eq!(*bucket_settings, Some(Some(settings)));
+    } else {
+        panic!("Expected S3 ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_bucket_settings_loaded_shows_error_when_err() {
+    let (mut app, tab_id) = create_s3_app_with_tab();
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::BucketSettingsLoaded(Err(AppError::AwsApi("access denied".to_string()))),
+    );
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// --- ObjectContentLoaded tests ---
+
+#[test]
+fn handle_tab_event_object_content_loaded_sets_preview_when_ok() {
+    use crate::aws::s3_model::ObjectContent;
+    let (mut app, tab_id) = create_s3_app_with_tab();
+    // プレビューをロード中状態にする
+    if let Some(tab) = app.find_tab_mut(tab_id) {
+        if let ServiceData::S3 { object_preview, .. } = &mut tab.data {
+            *object_preview = Some(None); // ロード中
+        }
+    }
+    let content = ObjectContent {
+        content_type: "text/plain".to_string(),
+        body: "Hello, World!".to_string(),
+        size: 13,
+    };
+    app.handle_tab_event(tab_id, TabEvent::ObjectContentLoaded(Ok(content.clone())));
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::S3 {
+        object_preview,
+        preview_scroll,
+        ..
+    } = &tab.data
+    {
+        assert_eq!(*object_preview, Some(Some(content)));
+        assert_eq!(*preview_scroll, 0);
+    } else {
+        panic!("Expected S3 ServiceData");
+    }
+}
+
+#[test]
+fn handle_tab_event_object_content_loaded_shows_error_and_clears_preview_when_err() {
+    let (mut app, tab_id) = create_s3_app_with_tab();
+    // プレビューをロード中状態にする
+    if let Some(tab) = app.find_tab_mut(tab_id) {
+        if let ServiceData::S3 { object_preview, .. } = &mut tab.data {
+            *object_preview = Some(None);
+        }
+    }
+    app.handle_tab_event(
+        tab_id,
+        TabEvent::ObjectContentLoaded(Err(AppError::AwsApi(
+            "Binary files cannot be previewed".to_string(),
+        ))),
+    );
+    let tab = app.find_tab(tab_id).unwrap();
+    assert!(!tab.loading);
+    if let ServiceData::S3 { object_preview, .. } = &tab.data {
+        assert_eq!(*object_preview, None);
+    } else {
+        panic!("Expected S3 ServiceData");
+    }
+    assert!(app.message.is_some());
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.level, MessageLevel::Error);
+}
+
+// --- Download tests ---
+
+fn create_s3_detail_app_with_object() -> App {
+    use crate::aws::s3_model::S3Object;
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::S3);
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = false;
+        tab.tab_view = crate::tab::TabView::Detail;
+        if let ServiceData::S3 {
+            selected_bucket,
+            objects,
+            ..
+        } = &mut tab.data
+        {
+            *selected_bucket = Some("my-bucket".to_string());
+            *objects = vec![S3Object {
+                key: "docs/readme.txt".to_string(),
+                size: Some(1024),
+                last_modified: Some("2024-01-01".to_string()),
+                storage_class: Some("STANDARD".to_string()),
+                is_prefix: false,
+            }];
+        }
+    }
+    app
+}
+
+#[test]
+fn handle_download_sets_form_mode_when_s3_detail_with_file_selected() {
+    let mut app = create_s3_detail_app_with_object();
+    app.dispatch(Action::Download);
+    if let Mode::Form(ctx) = &app.active_tab().unwrap().mode {
+        assert_eq!(ctx.kind, FormKind::DownloadS3Object);
+        assert_eq!(ctx.fields.len(), 1);
+        assert_eq!(ctx.fields[0].label, "Save Directory");
+        assert!(ctx.fields[0].required);
+    } else {
+        panic!("Expected Form mode with DownloadS3Object");
+    }
+}
+
+#[test]
+fn handle_download_does_nothing_when_s3_detail_with_prefix_selected() {
+    use crate::aws::s3_model::S3Object;
+    let mut app = App::new("dev".to_string(), None);
+    app.create_tab(ServiceKind::S3);
+    if let Some(tab) = app.active_tab_mut() {
+        tab.loading = false;
+        tab.tab_view = crate::tab::TabView::Detail;
+        if let ServiceData::S3 {
+            selected_bucket,
+            objects,
+            ..
+        } = &mut tab.data
+        {
+            *selected_bucket = Some("my-bucket".to_string());
+            *objects = vec![S3Object {
+                key: "docs/".to_string(),
+                size: Some(0),
+                last_modified: Some("".to_string()),
+                storage_class: Some("".to_string()),
+                is_prefix: true,
+            }];
+        }
+    }
+    app.dispatch(Action::Download);
+    assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+}
+
+#[test]
+fn handle_download_does_nothing_when_not_s3_detail() {
+    let mut app = app_with_ec2_tab();
+    app.dispatch(Action::Download);
+    assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
+}
+
+// --- Upload tests ---
+
+#[test]
+fn handle_upload_sets_form_mode_when_s3_detail() {
+    let mut app = create_s3_detail_app_with_object();
+    app.dispatch(Action::Upload);
+    if let Mode::Form(ctx) = &app.active_tab().unwrap().mode {
+        assert_eq!(ctx.kind, FormKind::UploadS3Object);
+        assert_eq!(ctx.fields.len(), 1);
+        assert_eq!(ctx.fields[0].label, "Local File Path");
+        assert!(ctx.fields[0].required);
+    } else {
+        panic!("Expected Form mode with UploadS3Object");
+    }
+}
+
+#[test]
+fn handle_upload_does_nothing_when_not_s3_detail() {
+    let mut app = app_with_ec2_tab();
+    app.dispatch(Action::Upload);
+    assert_eq!(app.active_tab().unwrap().mode, Mode::Normal);
 }

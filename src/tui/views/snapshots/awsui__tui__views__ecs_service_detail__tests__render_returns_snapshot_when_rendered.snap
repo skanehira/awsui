@@ -17,6 +17,7 @@ expression: buffer_to_string(&terminal)
 ││  Cluster ARN       arn:aws:ecs:ap-northeast-1:123456789012:cluster/web-cluster       ││
 ││                                                                                      ││
 │└──────────────────────────────────────────────────────────────────────────────────────┘│
+│ Tasks  │  Deployments                                                                  │
 │Task ID        Status     Desired    Health     Launch Type  Started At                 │
 │abc123def456   RUNNING    RUNNING    HEALTHY    FARGATE      2026-02-04T20:07:00Z       │
 │ghi789jkl012   RUNNING    RUNNING    -          FARGATE      2026-02-04T20:07:00Z       │
@@ -24,6 +25,5 @@ expression: buffer_to_string(&terminal)
 │                                                                                        │
 │                                                                                        │
 │                                                                                        │
-│                                                                                        │
 └────────────────────────────────────────────────────────────────────────────────────────┘
- j/k:move Enter:detail Esc:back ?:help
+ j/k:move ]/[:switch-tab d:force-deploy s:scale x:stop-task l:logs a:exec Enter:detail Esc

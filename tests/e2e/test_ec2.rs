@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::common::spawn_app;
 
 #[test]
@@ -68,6 +70,51 @@ fn filter_narrows_list_when_typed() {
         "Filter should narrow to web-server instance, got:\n{}",
         contents
     );
+    h.send_char('q').unwrap();
+    h.wait_exit().unwrap();
+}
+
+#[test]
+fn ec2_detail_shows_sg_tab_when_switched() {
+    let mut h = spawn_app(100, 30);
+    h.wait_for_text("All Services").unwrap();
+    h.send_enter().unwrap();
+    // データのロード完了を待つ
+    h.wait_for_text("web-server-1").unwrap();
+    // 最初のインスタンスの詳細へ
+    h.send_enter().unwrap();
+    // 詳細ビュー固有のテキストを待つ
+    h.wait_for_text("[Overview]")
+        .expect("Should enter detail view");
+    // Tabキーで Overview → Tags → SecurityGroups
+    h.send_tab().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    h.send_tab().unwrap();
+    // SecurityGroupsタブのデータ読み込みを待つ
+    h.wait_for_text("[Security Groups]")
+        .expect("Security Groups tab should be active");
+    h.send_char('q').unwrap();
+    h.wait_exit().unwrap();
+}
+
+#[test]
+fn ec2_detail_shows_metrics_tab_when_switched() {
+    let mut h = spawn_app(100, 30);
+    h.wait_for_text("All Services").unwrap();
+    h.send_enter().unwrap();
+    h.wait_for_text("web-server-1").unwrap();
+    h.send_enter().unwrap();
+    h.wait_for_text("[Overview]")
+        .expect("Should enter detail view");
+    // Tabキーで Overview → Tags → SecurityGroups → Metrics
+    h.send_tab().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    h.send_tab().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    h.send_tab().unwrap();
+    // Metricsタブの表示を待つ
+    h.wait_for_text("[Metrics]")
+        .expect("Metrics tab should be active");
     h.send_char('q').unwrap();
     h.wait_exit().unwrap();
 }

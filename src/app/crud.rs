@@ -11,6 +11,22 @@ impl App {
             return;
         };
         let form_ctx = match view {
+            (ServiceKind::Ecr, crate::tab::TabView::List) => Some(FormContext {
+                kind: FormKind::CreateEcrRepository,
+                fields: vec![
+                    FormField {
+                        label: "Repository Name".to_string(),
+                        input: Input::default(),
+                        required: true,
+                    },
+                    FormField {
+                        label: "Tag Mutability (MUTABLE/IMMUTABLE)".to_string(),
+                        input: Input::from("MUTABLE"),
+                        required: true,
+                    },
+                ],
+                focused_field: 0,
+            }),
             (ServiceKind::S3, crate::tab::TabView::List) => Some(FormContext {
                 kind: FormKind::CreateS3Bucket,
                 fields: vec![FormField {
@@ -69,6 +85,64 @@ impl App {
             return;
         };
         match view {
+            (ServiceKind::Ecr, crate::tab::TabView::List) => {
+                if !self.check_delete_permission("ecr") {
+                    return;
+                }
+                let repo_name = self.active_tab().and_then(|tab| {
+                    if let crate::tab::ServiceData::Ecr { repositories, .. } = &tab.data {
+                        repositories
+                            .filtered
+                            .get(tab.selected_index)
+                            .map(|r| r.repository_name.clone())
+                    } else {
+                        None
+                    }
+                });
+                let Some(name) = repo_name else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
+                        action: DangerAction::DeleteEcrRepository(name),
+                        input: Input::default(),
+                    });
+                }
+            }
+            (ServiceKind::Ecr, crate::tab::TabView::Detail) => {
+                if !self.check_delete_permission("ecr") {
+                    return;
+                }
+                let image_info = self.active_tab().and_then(|tab| {
+                    if let crate::tab::ServiceData::Ecr {
+                        repositories,
+                        images,
+                        ..
+                    } = &tab.data
+                    {
+                        let repo_name = repositories
+                            .filtered
+                            .get(tab.selected_index)
+                            .map(|r| r.repository_name.clone())?;
+                        let image = images.get(tab.detail_tag_index)?;
+                        Some((repo_name, image.image_digest.clone()))
+                    } else {
+                        None
+                    }
+                });
+                let Some((repository_name, image_digest)) = image_info else {
+                    return;
+                };
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.mode = Mode::DangerConfirm(DangerConfirmContext {
+                        action: DangerAction::DeleteEcrImage {
+                            repository_name,
+                            image_digest,
+                        },
+                        input: Input::default(),
+                    });
+                }
+            }
             (ServiceKind::Ec2, crate::tab::TabView::List) => {
                 if !self.check_delete_permission("ec2") {
                     return;
@@ -168,6 +242,61 @@ impl App {
         }
     }
 
+    /// Download操作のハンドリング（S3オブジェクトダウンロード）
+    pub(super) fn handle_download(&mut self) {
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        if view != (ServiceKind::S3, crate::tab::TabView::Detail) {
+            return;
+        }
+        // prefixでないオブジェクトが選択されているか確認
+        let is_file = self.active_tab().is_some_and(|tab| {
+            if let crate::tab::ServiceData::S3 { objects, .. } = &tab.data {
+                objects
+                    .get(tab.detail_tag_index)
+                    .is_some_and(|obj| !obj.is_prefix)
+            } else {
+                false
+            }
+        });
+        if !is_file {
+            return;
+        }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.mode = Mode::Form(FormContext {
+                kind: FormKind::DownloadS3Object,
+                fields: vec![FormField {
+                    label: "Save Directory".to_string(),
+                    input: Input::default(),
+                    required: true,
+                }],
+                focused_field: 0,
+            });
+        }
+    }
+
+    /// Upload操作のハンドリング（S3オブジェクトアップロード）
+    pub(super) fn handle_upload(&mut self) {
+        let Some(view) = self.current_view() else {
+            return;
+        };
+        if view != (ServiceKind::S3, crate::tab::TabView::Detail) {
+            return;
+        }
+        if let Some(tab) = self.active_tab_mut() {
+            tab.mode = Mode::Form(FormContext {
+                kind: FormKind::UploadS3Object,
+                fields: vec![FormField {
+                    label: "Local File Path".to_string(),
+                    input: Input::default(),
+                    required: true,
+                }],
+                focused_field: 0,
+            });
+        }
+    }
+
     /// Edit操作のハンドリング
     pub(super) fn handle_edit(&mut self) {
         let Some(view) = self.current_view() else {
@@ -214,6 +343,22 @@ impl App {
                 let msg = format!("'{}' is required", field.label);
                 self.show_message(MessageLevel::Error, "Validation Error", msg);
                 return SideEffect::None;
+            }
+        }
+
+        // ScaleEcsService: 0以上の整数バリデーション
+        if ctx.kind == FormKind::ScaleEcsService {
+            let value = ctx.fields[0].input.value();
+            match value.parse::<i32>() {
+                Ok(n) if n >= 0 => {}
+                _ => {
+                    self.show_message(
+                        MessageLevel::Error,
+                        "Validation Error",
+                        "Desired count must be a non-negative integer".to_string(),
+                    );
+                    return SideEffect::None;
+                }
             }
         }
 

@@ -74,6 +74,9 @@ fn render_tab_content(
                     spinner_tick,
                     profile: app.profile.as_deref(),
                     region: app.region.as_deref(),
+                    can_delete: app
+                        .delete_permissions
+                        .can_delete(ServiceKind::Ecr.cli_name()),
                 };
                 awsui::tui::views::ecr_list::render(frame, &props, area);
             }
@@ -82,7 +85,9 @@ fn render_tab_content(
             if let awsui::tab::ServiceData::Ecr {
                 repositories,
                 images,
-                ..
+                detail_tab,
+                lifecycle_policy,
+                scan_result,
             } = &tab.data
                 && let Some(repo) = repositories.filtered.get(tab.selected_index)
             {
@@ -90,11 +95,16 @@ fn render_tab_content(
                     frame,
                     repo,
                     images,
+                    detail_tab,
+                    lifecycle_policy.as_ref().and_then(|p| p.as_deref()),
+                    scan_result.as_ref().and_then(|r| r.as_ref()),
                     tab.detail_tag_index,
                     tab.loading,
                     spinner_tick,
                     app.profile.as_deref(),
                     app.region.as_deref(),
+                    app.delete_permissions
+                        .can_delete(ServiceKind::Ecr.cli_name()),
                     area,
                 );
             }
@@ -139,17 +149,21 @@ fn render_tab_content(
                             awsui::tui::views::ecs_task_detail::render(frame, task, area);
                         }
                     }
-                    Some(awsui::tab::EcsNavLevel::ServiceDetail { service_index }) => {
+                    Some(awsui::tab::EcsNavLevel::ServiceDetail {
+                        service_index,
+                        detail_tab,
+                    }) => {
                         if let Some(service) = services.get(*service_index) {
-                            awsui::tui::views::ecs_service_detail::render(
-                                frame,
-                                service,
-                                tasks,
-                                tab.detail_tag_index,
-                                tab.loading,
-                                spinner_tick,
-                                area,
-                            );
+                            let props =
+                                awsui::tui::views::ecs_service_detail::EcsServiceDetailProps {
+                                    service,
+                                    tasks,
+                                    selected_index: tab.detail_tag_index,
+                                    loading: tab.loading,
+                                    spinner_tick,
+                                    detail_tab: detail_tab.clone(),
+                                };
+                            awsui::tui::views::ecs_service_detail::render(frame, &props, area);
                         }
                     }
                     _ => {
@@ -178,6 +192,9 @@ fn render_tab_content(
                     spinner_tick,
                     profile: app.profile.as_deref(),
                     region: app.region.as_deref(),
+                    can_delete: app
+                        .delete_permissions
+                        .can_delete(ServiceKind::S3.cli_name()),
                 };
                 awsui::tui::views::s3_list::render(frame, &props, area);
             }
@@ -187,20 +204,45 @@ fn render_tab_content(
                 objects,
                 selected_bucket,
                 current_prefix,
+                detail_tab,
+                bucket_settings,
+                object_preview,
+                preview_scroll,
                 ..
             } = &tab.data
                 && let Some(bucket_name) = selected_bucket
             {
-                awsui::tui::views::s3_detail::render(
-                    frame,
-                    bucket_name,
-                    objects,
-                    current_prefix,
-                    tab.detail_tag_index,
-                    tab.loading,
-                    spinner_tick,
-                    area,
-                );
+                // プレビューモード
+                if let Some(preview) = object_preview {
+                    let key = objects
+                        .get(tab.detail_tag_index)
+                        .map(|o| o.key.as_str())
+                        .unwrap_or("unknown");
+                    awsui::tui::views::s3_preview::render(
+                        frame,
+                        key,
+                        preview.as_ref(),
+                        *preview_scroll,
+                        tab.loading,
+                        spinner_tick,
+                        area,
+                    );
+                } else {
+                    awsui::tui::views::s3_detail::render(
+                        frame,
+                        bucket_name,
+                        objects,
+                        current_prefix,
+                        detail_tab,
+                        bucket_settings.as_ref().and_then(|s| s.as_ref()),
+                        tab.detail_tag_index,
+                        tab.loading,
+                        spinner_tick,
+                        app.delete_permissions
+                            .can_delete(ServiceKind::S3.cli_name()),
+                        area,
+                    );
+                }
             }
         }
         Some((ServiceKind::Vpc, TabView::List)) => {
@@ -244,6 +286,9 @@ fn render_tab_content(
                     spinner_tick,
                     profile: app.profile.as_deref(),
                     region: app.region.as_deref(),
+                    can_delete: app
+                        .delete_permissions
+                        .can_delete(ServiceKind::SecretsManager.cli_name()),
                 };
                 awsui::tui::views::secrets_list::render(frame, &props, area);
             }
@@ -280,6 +325,12 @@ fn render_tab_overlays(frame: &mut Frame, tab: &awsui::tab::Tab) {
                 ConfirmAction::Start(id) => format!("Start instance {}?", id),
                 ConfirmAction::Stop(id) => format!("Stop instance {}?", id),
                 ConfirmAction::Reboot(id) => format!("Reboot instance {}?", id),
+                ConfirmAction::ForceDeployEcsService { service_name, .. } => {
+                    format!("Force new deployment for {}?", service_name)
+                }
+                ConfirmAction::StopEcsTask { task_arn, .. } => {
+                    format!("Stop task {}?", task_arn)
+                }
             };
             let dialog = ConfirmDialog::new(&msg);
             frame.render_widget(dialog, frame.area());
@@ -314,7 +365,9 @@ fn render_global_overlays(frame: &mut Frame, app: &App) {
     if app.show_help
         && let Some(view) = app.current_view()
     {
-        let help = HelpPopup::new(view);
+        let (service, _) = view;
+        let can_delete = app.delete_permissions.can_delete(service.cli_name());
+        let help = HelpPopup::new(view, can_delete);
         frame.render_widget(help, frame.area());
     }
 }

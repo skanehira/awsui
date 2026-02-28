@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use awsui::aws::client::Ec2Client;
+use awsui::aws::cloudwatch_client::CloudWatchClient;
 use awsui::aws::ecr_client::EcrClient;
 use awsui::aws::ecs_client::EcsClient;
 use awsui::aws::logs_client::LogsClient;
@@ -18,6 +19,7 @@ pub(crate) struct Clients {
     pub(crate) vpc: Option<Arc<dyn VpcClient>>,
     pub(crate) secrets: Option<Arc<dyn SecretsClient>>,
     pub(crate) logs: Option<Arc<dyn LogsClient>>,
+    pub(crate) cloudwatch: Option<Arc<dyn CloudWatchClient>>,
 }
 
 impl Clients {

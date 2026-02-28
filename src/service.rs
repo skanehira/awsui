@@ -22,6 +22,18 @@ impl ServiceKind {
         ServiceKind::SecretsManager,
     ];
 
+    /// CLI引数用のサービス名（--allow-delete等で使用）
+    pub fn cli_name(&self) -> &'static str {
+        match self {
+            ServiceKind::Ec2 => "ec2",
+            ServiceKind::Ecr => "ecr",
+            ServiceKind::Ecs => "ecs",
+            ServiceKind::S3 => "s3",
+            ServiceKind::Vpc => "vpc",
+            ServiceKind::SecretsManager => "secrets",
+        }
+    }
+
     /// 短縮名（タブバー等で使用）
     pub fn short_name(&self) -> &'static str {
         match self {

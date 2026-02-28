@@ -1,0 +1,19 @@
+---
+source: src/tui/views/s3_detail.rs
+expression: buffer_to_string(&terminal)
+---
+┌ my-prod-bucket ─────────────────────────────────────────────────── 0 objects ┐
+│ Objects  |  Settings                                                         │
+│┌ Bucket Settings ───────────────────────────────────────────────────────────┐│
+││Region:      us-west-2                                                      ││
+││                                                                            ││
+││Versioning:  Suspended                                                      ││
+││                                                                            ││
+││Encryption:  aws:kms                                                        ││
+││                                                                            ││
+││                                                                            ││
+││                                                                            ││
+││                                                                            ││
+│└────────────────────────────────────────────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────────────────┘
+ j/k:move Enter:open d:download u:upload D:delete [/]:tab Esc:back ?:help

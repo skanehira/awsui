@@ -63,3 +63,22 @@ pub struct Volume {
     pub device_name: String,
     pub state: String,
 }
+
+/// セキュリティグループのドメインモデル
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityGroup {
+    pub group_id: String,
+    pub group_name: String,
+    pub description: String,
+    pub inbound_rules: Vec<SecurityGroupRule>,
+    pub outbound_rules: Vec<SecurityGroupRule>,
+}
+
+/// セキュリティグループルールのドメインモデル
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityGroupRule {
+    pub protocol: String,
+    pub port_range: String,
+    pub source_or_destination: String,
+    pub description: Option<String>,
+}

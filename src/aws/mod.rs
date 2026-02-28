@@ -1,4 +1,6 @@
 pub mod client;
+pub mod cloudwatch_client;
+pub mod cloudwatch_model;
 pub mod ecr_client;
 pub mod ecr_model;
 pub mod ecs_client;

@@ -21,6 +21,7 @@ pub struct SecretsListProps<'a> {
     pub spinner_tick: usize,
     pub profile: Option<&'a str>,
     pub region: Option<&'a str>,
+    pub can_delete: bool,
 }
 
 /// シークレット一覧画面を描画する
@@ -34,6 +35,7 @@ pub fn render(frame: &mut Frame, props: &SecretsListProps, area: Rect) {
         spinner_tick,
         profile,
         region,
+        can_delete,
     } = props;
     let (selected_index, loading, spinner_tick) = (*selected_index, *loading, *spinner_tick);
     let (profile, region) = (*profile, *region);
@@ -69,7 +71,11 @@ pub fn render(frame: &mut Frame, props: &SecretsListProps, area: Rect) {
         outer_chunks[1],
         mode,
         filter_input.value(),
-        "j/k:move Enter:detail /:filter ?:help",
+        if *can_delete {
+            "j/k:move Enter:detail c:create D:delete /:filter ?:help Esc:back"
+        } else {
+            "j/k:move Enter:detail c:create /:filter ?:help Esc:back"
+        },
     );
 }
 
@@ -173,6 +179,7 @@ mod tests {
                         spinner_tick: 0,
                         profile: Some("dev-account"),
                         region: Some("ap-northeast-1"),
+                        can_delete: true,
                     },
                     frame.area(),
                 );
@@ -203,6 +210,7 @@ mod tests {
                         spinner_tick: 0,
                         profile: None,
                         region: None,
+                        can_delete: true,
                     },
                     frame.area(),
                 );
@@ -239,6 +247,7 @@ mod tests {
                         spinner_tick: 0,
                         profile: None,
                         region: None,
+                        can_delete: true,
                     },
                     frame.area(),
                 );
@@ -272,6 +281,7 @@ mod tests {
                         spinner_tick: 0,
                         profile: Some("dev-account"),
                         region: Some("ap-northeast-1"),
+                        can_delete: true,
                     },
                     frame.area(),
                 );
@@ -303,6 +313,7 @@ mod tests {
                         spinner_tick: 0,
                         profile: None,
                         region: None,
+                        can_delete: true,
                     },
                     frame.area(),
                 );
@@ -333,6 +344,7 @@ mod tests {
                         spinner_tick: 0,
                         profile: None,
                         region: None,
+                        can_delete: true,
                     },
                     frame.area(),
                 );
@@ -367,6 +379,7 @@ mod tests {
                         spinner_tick: 0,
                         profile: Some("dev-account"),
                         region: Some("ap-northeast-1"),
+                        can_delete: true,
                     },
                     frame.area(),
                 );

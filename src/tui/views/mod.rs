@@ -11,6 +11,7 @@ pub mod ecs_task_detail;
 pub mod profile_select;
 pub mod s3_detail;
 pub mod s3_list;
+pub mod s3_preview;
 pub mod secrets_detail;
 pub mod secrets_list;
 pub mod service_select;

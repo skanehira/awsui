@@ -187,6 +187,7 @@ mod tests {
             health_check_grace_period_seconds: Some(0),
             deployment_status: Some("COMPLETED".to_string()),
             enable_execute_command: true,
+            deployments: vec![],
         }
     }
 

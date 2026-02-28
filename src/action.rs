@@ -73,6 +73,21 @@ pub enum Action {
     SsmConnect,
     /// ECS Execute Command でコンテナにアタッチ
     EcsExec,
+    /// ECSサービスのforce new deployment
+    ForceDeploy,
+    /// ECSサービスのdesired count変更
+    ScaleService,
+    /// ECSタスクの停止
+    StopTask,
+    /// S3オブジェクトダウンロード
+    Download,
+    /// S3オブジェクトアップロード
+    Upload,
+    /// S3オブジェクトプレビュー操作
+    PreviewScrollUp,
+    PreviewScrollDown,
+    PreviewScrollToTop,
+    PreviewScrollToBottom,
     /// SSO loginダイアログでEsc押下時
     CancelSsoLogin,
     Noop,
